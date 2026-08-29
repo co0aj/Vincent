@@ -468,16 +468,41 @@
             }
 
             function drawMaskedThreads(time) {
-                threadsCtx.clearRect(0, 0, 1200, 900);
+                // Chi lam viec trong THREADS_BBOX thay vi toan bo 1200x900
+                const b = THREADS_BBOX;
+                threadsCtx.clearRect(b.x, b.y, b.w, b.h);
+                threadsCtx.save();
+                threadsCtx.beginPath();
+                threadsCtx.rect(b.x, b.y, b.w, b.h);
+                threadsCtx.clip();
                 drawYarnThreads(threadsCtx, time);
+                threadsCtx.restore();
+
                 threadsCtx.globalCompositeOperation = 'destination-out';
-                threadsCtx.drawImage(images.leftMask, -currentOffset, 0, 1200, 900);
+                // leftMask duoc dat tai (-currentOffset, 0) tren canvas, nen vung nguon tuong ung
+                // voi dest rect b la (b.x + currentOffset, b.y, b.w, b.h) trong anh goc.
+                threadsCtx.drawImage(images.leftMask, b.x + currentOffset, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
                 threadsCtx.globalCompositeOperation = 'source-over';
-                ctx.drawImage(threadsCanvas, 0, 0, 1200, 900);
+                ctx.drawImage(threadsCanvas, b.x, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
             }
 
-            // === FIX #2: CACHE SHADE MASK + INSIDE MASK, CHI VE LAI KHI currentOffset THAY DOI ===
+            // === FIX #2: CACHE SHADE MASK + INSIDE MASK + SHADOW(multiply) + LEFT/RIGHT, CHI VE LAI KHI currentOffset THAY DOI ===
+            // Ca 4 nhom nay chi phu thuoc currentOffset (khong co animation theo thoi gian),
+            // nen truoc day bi ve lai toan bo 1200x900 O MOI FRAME la lang phi rat lon.
             let lastCachedOffset = null; // offset da dung de tinh cache lan cuoi (null = chua tinh)
+            const combinedShadowCanvas = createOffscreenCanvas();
+            const combinedShadowCtx = combinedShadowCanvas.getContext('2d');
+            const combinedLeftRightCanvas = createOffscreenCanvas();
+            const combinedLeftRightCtx = combinedLeftRightCanvas.getContext('2d');
+
+            // Bounding box gan dung cho vung dây len co the xuat hien (theo currentOffset toi da)
+            // De tranh phai tinh lai moi frame, chi can mot vung du rong bao het truong hop keo max.
+            const THREADS_BBOX = {
+                x: Math.max(0, 510 - MAX_DRAG_DIST - 120),
+                y: Math.max(0, THREAD_MIN_Y - 60),
+                w: Math.min(1200, (620 + MAX_DRAG_DIST + 120) - Math.max(0, 510 - MAX_DRAG_DIST - 120)),
+                h: Math.min(900, (THREAD_MAX_Y + 60) - Math.max(0, THREAD_MIN_Y - 60))
+            };
 
             function rebuildStaticMasksIfNeeded() {
                 if (currentOffset === lastCachedOffset) return; // offset khong doi -> dung lai cache cu
@@ -496,6 +521,19 @@
                 insideMaskCtx.drawImage(images.leftMask, -currentOffset, 0, 1200, 900);
                 insideMaskCtx.drawImage(images.rightMask, currentOffset, 0, 1200, 900);
                 insideMaskCtx.globalCompositeOperation = 'source-over';
+
+                // --- Gop Left_Shadow + Right_Shadow thanh 1 canvas (multiply giua 2 anh nay voi nhau) ---
+                // De luc render chi can 1 lan drawImage(multiply) thay vi 2 lan.
+                combinedShadowCtx.clearRect(0, 0, 1200, 900);
+                combinedShadowCtx.drawImage(images.leftShadow, -currentOffset, 0, 1200, 900);
+                combinedShadowCtx.globalCompositeOperation = 'multiply';
+                combinedShadowCtx.drawImage(images.rightShadow, currentOffset, 0, 1200, 900);
+                combinedShadowCtx.globalCompositeOperation = 'source-over';
+
+                // --- Gop Left + Right thanh 1 canvas (khong can blend, chi la 2 lop phu thuong) ---
+                combinedLeftRightCtx.clearRect(0, 0, 1200, 900);
+                combinedLeftRightCtx.drawImage(images.left, -currentOffset, 0, 1200, 900);
+                combinedLeftRightCtx.drawImage(images.right, currentOffset, 0, 1200, 900);
 
                 lastCachedOffset = currentOffset;
             }
@@ -587,19 +625,17 @@
                 // 5. Mắt chính follow cursor
                 drawClippedEye();
 
-                // 6. Dây len bị che bởi Left_Mask (van phai ve moi frame vi co animation)
+                // 6. Dây len bị che bởi Left_Mask (van phai ve moi frame vi co animation, nhung da bound vung)
                 drawMaskedThreads(now);
 
-                // 7. Bóng đổ mảng Left/Right (Multiply)
+                // 7. Bóng đổ mảng Left/Right (Multiply) - da gop lam 1 canvas, cache theo offset
                 ctx.save();
                 ctx.globalCompositeOperation = 'multiply';
-                ctx.drawImage(images.leftShadow, -currentOffset, 0, 1200, 900);
-                ctx.drawImage(images.rightShadow, currentOffset, 0, 1200, 900);
+                ctx.drawImage(combinedShadowCanvas, 0, 0, 1200, 900);
                 ctx.restore();
 
-                // 8. Hai mảnh Left / Right phủ trên cùng
-                ctx.drawImage(images.left, -currentOffset, 0, 1200, 900);
-                ctx.drawImage(images.right, currentOffset, 0, 1200, 900);
+                // 8. Hai mảnh Left / Right phủ trên cùng - da gop lam 1 canvas, cache theo offset
+                ctx.drawImage(combinedLeftRightCanvas, 0, 0, 1200, 900);
 
                 // 9. Lớp phim cổ điển tối ưu hiệu năng (Pre-rendered)
                 drawOldFilmEffect(now);
