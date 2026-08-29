@@ -46,6 +46,21 @@
             user-select: none;
         }
 
+        .gif-multiply {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: center;
+            transform-origin: center;
+            will-change: transform;
+            pointer-events: none;
+            z-index: 10;
+            mix-blend-mode: multiply;
+        }
+
         #mainCanvas {
             width: 100%;
             height: 100%;
@@ -67,7 +82,7 @@
             const canvas = document.getElementById('mainCanvas');
             const ctx = canvas.getContext('2d');
 
-            // --- CÁC OFFSCREEN CANVAS NGUYÊN BẢN CỦA BẠN ---
+            // --- OFFSCREEN CANVAS CHO MASKING (KHONG DUNG CHO HIT-TEST NUA) ---
             const eyeClipCanvas = createOffscreenCanvas();
             const eyeClipCtx = eyeClipCanvas.getContext('2d');
 
@@ -77,11 +92,17 @@
             const insideMaskCanvas = createOffscreenCanvas();
             const insideMaskCtx = insideMaskCanvas.getContext('2d');
 
+            // Canvas phụ xử lý Shade + Right_Mask
             const shadeMaskCanvas = createOffscreenCanvas();
             const shadeMaskCtx = shadeMaskCanvas.getContext('2d');
 
+            // Canvas phụ xử lý Dây Len + Left_Mask
             const threadsCanvas = createOffscreenCanvas();
             const threadsCtx = threadsCanvas.getContext('2d');
+
+            // Canvas tạm 1 lần dùng để đọc alpha data khi ảnh vừa load xong
+            const decodeCanvas = createOffscreenCanvas();
+            const decodeCtx = decodeCanvas.getContext('2d', { willReadFrequently: true });
 
             function createOffscreenCanvas() {
                 const c = document.createElement('canvas');
@@ -91,53 +112,14 @@
             }
 
             // ==========================================
-            // TỐI ƯU 1: TRA CỨU ALPHA HIT-TEST NGUYÊN BẢN O(1)
+            // PRE-RENDER FILM EFFECT (SIÊU TỐI ƯU HIỆU NĂNG)
             // ==========================================
-            const alphaDataMaps = {
-                left: new Uint8Array(1200 * 900),
-                right: new Uint8Array(1200 * 900)
-            };
-
-            function buildAlphaMap(key, imgElement) {
-                const offCanvas = createOffscreenCanvas();
-                const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
-                offCtx.drawImage(imgElement, 0, 0, 1200, 900);
-                const rawData = offCtx.getImageData(0, 0, 1200, 900).data;
-                const targetArray = alphaDataMaps[key];
-
-                for (let i = 0; i < targetArray.length; i++) {
-                    targetArray[i] = rawData[i * 4 + 3];
-                }
-            }
-
-            function checkHitRegion(px, py) {
-                const x = Math.floor(px);
-                const y = Math.floor(py);
-
-                if (x < 0 || x >= 1200 || y < 0 || y >= 900) return null;
-
-                const leftX = x + Math.floor(currentOffset);
-                if (leftX >= 0 && leftX < 1200) {
-                    if (alphaDataMaps.left[y * 1200 + leftX] > 10) return 'left';
-                }
-
-                const rightX = x - Math.floor(currentOffset);
-                if (rightX >= 0 && rightX < 1200) {
-                    if (alphaDataMaps.right[y * 1200 + rightX] > 10) return 'right';
-                }
-
-                return null;
-            }
-
-            // ==========================================
-            // TỐI ƯU 2: CỐ ĐỊNH FILM NOISE ĐỂ XÓA TÌNH TRẠNG NHẤP NHÁY
-            // ==========================================
-            const FILM_FRAME_COUNT = 4;
+            const FILM_FRAME_COUNT = 10;
             const filmFrames = [];
             let currentFilmFrameIndex = 0;
             let lastFrameChangeTime = 0;
 
-            function initFilmEffect() {
+            function initOptimizedFilmEffect() {
                 for (let f = 0; f < FILM_FRAME_COUNT; f++) {
                     const fCanvas = createOffscreenCanvas();
                     const fCtx = fCanvas.getContext('2d');
@@ -148,57 +130,88 @@
                     const noiseData = fCtx.createImageData(1200, 900);
                     const data = noiseData.data;
                     for (let i = 0; i < data.length; i += 4) {
-                        if (Math.random() < 0.08) {
+                        if (Math.random() < 0.12) {
                             const n = Math.random() * 255;
                             data[i] = n;
                             data[i + 1] = n;
                             data[i + 2] = n;
-                            data[i + 3] = 12;
+                            data[i + 3] = 16;
                         }
                     }
                     fCtx.putImageData(noiseData, 0, 0);
 
-                    const scratchCount = Math.floor(Math.random() * 2) + 1;
+                    const scratchCount = Math.floor(Math.random() * 2) + 2;
                     for (let s = 0; s < scratchCount; s++) {
                         const sx = Math.random() * 1200;
-                        fCtx.strokeStyle = `rgba(15, 15, 15, ${0.12 + Math.random() * 0.15})`;
-                        fCtx.lineWidth = 0.8;
+                        fCtx.strokeStyle = `rgba(15, 15, 15, ${0.15 + Math.random() * 0.25})`;
+                        fCtx.lineWidth = 0.6 + Math.random() * 1.2;
                         fCtx.beginPath();
-                        fCtx.moveTo(sx, 0);
+                        fCtx.moveTo(sx + (Math.random() - 0.5) * 3, 0);
                         fCtx.lineTo(sx + (Math.random() - 0.5) * 3, 900);
+                        fCtx.stroke();
+                    }
+
+                    const dustCount = Math.floor(Math.random() * 14) + 4;
+                    fCtx.fillStyle = 'rgba(10, 10, 10, 0.65)';
+                    for (let d = 0; d < dustCount; d++) {
+                        fCtx.beginPath();
+                        fCtx.arc(Math.random() * 1200, Math.random() * 900, 0.8 + Math.random() * 1.5, 0, Math.PI * 2);
+                        fCtx.fill();
+                    }
+
+                    if (Math.random() < 0.4) {
+                        fCtx.strokeStyle = 'rgba(10, 10, 10, 0.75)';
+                        fCtx.lineWidth = 1.0;
+                        const hx = Math.random() * 1200;
+                        const hy = Math.random() * 900;
+                        fCtx.beginPath();
+                        fCtx.moveTo(hx, hy);
+                        fCtx.quadraticCurveTo(hx + 10, hy + 15, hx + (Math.random() - 0.5) * 30, hy + 25);
                         fCtx.stroke();
                     }
 
                     const vigGrad = fCtx.createRadialGradient(600, 450, 380, 600, 450, 720);
                     vigGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
                     vigGrad.addColorStop(0.7, 'rgba(0, 0, 0, 0.35)');
-                    vigGrad.addColorStop(1, 'rgba(0, 0, 0, 0.95)');
+                    vigGrad.addColorStop(0.92, 'rgba(10, 10, 10, 0.8)');
+                    vigGrad.addColorStop(1, 'rgba(0, 0, 0, 0.98)');
 
                     fCtx.fillStyle = vigGrad;
                     fCtx.fillRect(0, 0, 1200, 900);
+
+                    fCtx.lineWidth = 20;
+                    fCtx.strokeStyle = 'rgba(0, 0, 0, 0.95)';
+                    fCtx.strokeRect(0, 0, 1200, 900);
 
                     filmFrames.push(fCanvas);
                 }
             }
 
             function drawOldFilmEffect(now) {
-                if (now - lastFrameChangeTime > 120) { // Chuyển frame chậm lại để hết giật
+                if (now - lastFrameChangeTime > 80) {
                     currentFilmFrameIndex = (currentFilmFrameIndex + 1) % FILM_FRAME_COUNT;
                     lastFrameChangeTime = now;
                 }
 
                 ctx.save();
-                ctx.drawImage(filmFrames[currentFilmFrameIndex], 0, 0, 1200, 900);
+                const jitterY = (Math.random() - 0.5) * 1.2;
+
+                if (Math.random() < 0.3) {
+                    ctx.globalAlpha = 0.92 + Math.random() * 0.08;
+                }
+
+                ctx.drawImage(filmFrames[currentFilmFrameIndex], 0, jitterY, 1200, 900);
                 ctx.restore();
             }
 
-            // --- BẢO TỒN NGUYÊN BẢN CẤU HÌNH & TƯƠNG TÁC ---
+            // --- CẤU HÌNH LOGIC BAN ĐẦU ---
             const EYE_CONFIG = { centerX: 600, centerY: 355, maxRadius: 10 };
             const MAX_DRAG_DIST = 190;
             const MIN_EXTRA_LENGTH = 2000;
             const THREAD_COUNT = 7;
             const THREAD_MIN_Y = 150;
             const THREAD_MAX_Y = 800;
+
             const YARN_COLORS = ['#9D1C14', '#C41B0D', '#D95505'];
 
             let isDragging = false;
@@ -211,6 +224,7 @@
             let currentEye = { x: 0, y: 0 };
 
             const images = {};
+
             const imageSources = {
                 bg: IMAGE_DATA.Background,
                 shade: IMAGE_DATA.Shade,
@@ -245,12 +259,33 @@
                 { id: '10', radiusX: 12, radiusY: 8, rotation: -40 * Math.PI / 180 },
                 { id: '11', radiusX: 12, radiusY: 8, rotation: -20 * Math.PI / 180 },
             ].map(cfg => ({
-                ...cfg, currX: 0, currY: 0, targetX: 0, targetY: 0, nextChangeTime: 0
+                ...cfg,
+                currX: 0,
+                currY: 0,
+                targetX: 0,
+                targetY: 0,
+                nextChangeTime: 0
             }));
 
             let loadedCount = 0;
             const totalImages = Object.keys(imageSources).length;
             let threads = [];
+
+            // === FIX #1: HIT-TEST BANG MANG ALPHA TIEN TINH (khong dung getImageData moi frame) ===
+            let leftAlpha = null;   // Uint8ClampedArray, alpha cua images.left tai vi tri goc (offset = 0)
+            let rightAlpha = null;  // Uint8ClampedArray, alpha cua images.right tai vi tri goc (offset = 0)
+
+            function buildAlphaMap(img) {
+                decodeCtx.clearRect(0, 0, 1200, 900);
+                decodeCtx.drawImage(img, 0, 0, 1200, 900);
+                const data = decodeCtx.getImageData(0, 0, 1200, 900).data;
+                // Chi luu kenh alpha (1 byte / pixel thay vi 4) de tiet kiem bo nho va tra cuu nhanh
+                const alpha = new Uint8ClampedArray(1200 * 900);
+                for (let i = 0, j = 3; i < alpha.length; i++, j += 4) {
+                    alpha[i] = data[j];
+                }
+                return alpha;
+            }
 
             for (let key in imageSources) {
                 images[key] = new Image();
@@ -258,15 +293,16 @@
                 images[key].onload = () => {
                     loadedCount++;
                     if (loadedCount === totalImages) {
+                        // Build cac alpha map MOT LAN duy nhat, ngay khi anh load xong
+                        leftAlpha = buildAlphaMap(images.left);
+                        rightAlpha = buildAlphaMap(images.right);
                         init();
                     }
                 };
             }
 
             function init() {
-                buildAlphaMap('left', images.left);
-                buildAlphaMap('right', images.right);
-                initFilmEffect();
+                initOptimizedFilmEffect();
                 setupThreads();
                 requestAnimationFrame(renderLoop);
             }
@@ -305,12 +341,15 @@
                         curveFactor1: (Math.random() - 0.5) * 1.5,
                         curveFactor2: (Math.random() - 0.5) * 1.5,
                         phaseShift: Math.random() * Math.PI * 2,
-                        baseColor: YARN_COLORS[i % YARN_COLORS.length]
+                        baseColor: YARN_COLORS[i % YARN_COLORS.length],
+                        cp1: { x: 0, y: 0 },
+                        cp2: { x: 0, y: 0 },
+                        leftPt: { x: 0, y: 0 },
+                        rightPt: { x: 0, y: 0 }
                     });
                 }
             }
 
-            // --- NGUYÊN BẢN TOÀN BỘ CÁC HÀM VẼ & TẮT LỚP MASK (Z-INDEX NGUYÊN THỦY) ---
             function drawYarnThreads(targetCtx, time) {
                 threads.forEach((t, index) => {
                     const lx = t.localLeftX - currentOffset;
@@ -336,25 +375,53 @@
                     targetCtx.beginPath();
                     targetCtx.moveTo(lx, ly + 4);
                     targetCtx.bezierCurveTo(cp1x, cp1y + 4, cp2x, cp2y + 4, rx, ry + 4);
-                    targetCtx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
-                    targetCtx.lineWidth = 4;
+                    targetCtx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+                    targetCtx.lineWidth = 5;
                     targetCtx.stroke();
 
                     targetCtx.beginPath();
                     targetCtx.moveTo(lx, ly);
                     targetCtx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, rx, ry);
                     targetCtx.strokeStyle = t.baseColor;
-                    targetCtx.lineWidth = 4;
+                    targetCtx.lineWidth = 4.5;
                     targetCtx.lineCap = 'round';
                     targetCtx.stroke();
 
-                    targetCtx.setLineDash([4, 4]);
+                    targetCtx.setLineDash([4, 3]);
                     targetCtx.beginPath();
                     targetCtx.moveTo(lx, ly);
                     targetCtx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, rx, ry);
-                    targetCtx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+                    targetCtx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
                     targetCtx.lineWidth = 2;
                     targetCtx.stroke();
+
+                    targetCtx.setLineDash([2, 5]);
+                    targetCtx.beginPath();
+                    targetCtx.moveTo(lx - 1, ly - 1);
+                    targetCtx.bezierCurveTo(cp1x - 1, cp1y - 1, cp2x - 1, cp2y - 1, rx - 1, ry - 1);
+                    targetCtx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+                    targetCtx.lineWidth = 2;
+                    targetCtx.stroke();
+
+                    targetCtx.setLineDash([]);
+                    targetCtx.strokeStyle = t.baseColor;
+                    targetCtx.lineWidth = 1;
+                    targetCtx.globalAlpha = 0.6;
+
+                    const samples = 15;
+                    for (let i = 1; i < samples; i++) {
+                        const u = i / samples;
+                        const px = Math.pow(1 - u, 3) * lx + 3 * Math.pow(1 - u, 2) * u * cp1x + 3 * (1 - u) * u * u * cp2x + u * u * u * rx;
+                        const py = Math.pow(1 - u, 3) * ly + 3 * Math.pow(1 - u, 2) * u * cp1y + 3 * (1 - u) * u * u * cp2y + u * u * u * ry;
+
+                        const fuzzAngle = (index + i * 17) % (Math.PI * 2);
+                        const fuzzLen = 2.5 + ((i + index) % 3);
+
+                        targetCtx.beginPath();
+                        targetCtx.moveTo(px, py);
+                        targetCtx.lineTo(px + Math.cos(fuzzAngle) * fuzzLen, py + Math.sin(fuzzAngle) * fuzzLen);
+                        targetCtx.stroke();
+                    }
 
                     targetCtx.restore();
                 });
@@ -363,35 +430,34 @@
             function drawMaskedThreads(time) {
                 threadsCtx.clearRect(0, 0, 1200, 900);
                 drawYarnThreads(threadsCtx, time);
-
                 threadsCtx.globalCompositeOperation = 'destination-out';
                 threadsCtx.drawImage(images.leftMask, -currentOffset, 0, 1200, 900);
                 threadsCtx.globalCompositeOperation = 'source-over';
-
                 ctx.drawImage(threadsCanvas, 0, 0, 1200, 900);
             }
 
-            function drawMaskedShade() {
+            // === FIX #2: CACHE SHADE MASK + INSIDE MASK, CHI VE LAI KHI currentOffset THAY DOI ===
+            let lastCachedOffset = null; // offset da dung de tinh cache lan cuoi (null = chua tinh)
+
+            function rebuildStaticMasksIfNeeded() {
+                if (currentOffset === lastCachedOffset) return; // offset khong doi -> dung lai cache cu
+
+                // --- Shade + Right_Mask ---
                 shadeMaskCtx.clearRect(0, 0, 1200, 900);
                 shadeMaskCtx.drawImage(images.shade, -currentOffset, 0, 1200, 900);
-
                 shadeMaskCtx.globalCompositeOperation = 'destination-out';
                 shadeMaskCtx.drawImage(images.rightMask, currentOffset, 0, 1200, 900);
                 shadeMaskCtx.globalCompositeOperation = 'source-over';
 
-                ctx.drawImage(shadeMaskCanvas, 0, 0, 1200, 900);
-            }
-
-            function drawMaskedInside() {
+                // --- Inside + Left_Mask + Right_Mask ---
                 insideMaskCtx.clearRect(0, 0, 1200, 900);
                 insideMaskCtx.drawImage(images.inside, 0, 0, 1200, 900);
-
                 insideMaskCtx.globalCompositeOperation = 'destination-out';
                 insideMaskCtx.drawImage(images.leftMask, -currentOffset, 0, 1200, 900);
                 insideMaskCtx.drawImage(images.rightMask, currentOffset, 0, 1200, 900);
                 insideMaskCtx.globalCompositeOperation = 'source-over';
 
-                ctx.drawImage(insideMaskCanvas, 0, 0, 1200, 900);
+                lastCachedOffset = currentOffset;
             }
 
             function drawClippedEye() {
@@ -400,11 +466,17 @@
                 eyeClipCtx.globalCompositeOperation = 'source-in';
                 eyeClipCtx.drawImage(images.eye, currentEye.x, currentEye.y, 1200, 900);
                 eyeClipCtx.globalCompositeOperation = 'source-over';
-
                 ctx.drawImage(eyeClipCanvas, 0, 0, 1200, 900);
             }
 
+            // === FIX #3 (BONUS): CAP NHAT MAT PHU O ~30FPS THAY VI 60FPS ===
+            let lastExtraEyesUpdate = 0;
+            const EXTRA_EYES_INTERVAL = 33; // ms, ~30fps
+
             function updateAndDrawExtraEyes(now) {
+                const shouldUpdateLerp = (now - lastExtraEyesUpdate) >= EXTRA_EYES_INTERVAL;
+                if (shouldUpdateLerp) lastExtraEyesUpdate = now;
+
                 extraEyesConfig.forEach(cfg => {
                     if (now > cfg.nextChangeTime) {
                         const angle = Math.random() * Math.PI * 2;
@@ -415,11 +487,14 @@
 
                         cfg.targetX = unrotatedX * Math.cos(cfg.rotation) - unrotatedY * Math.sin(cfg.rotation);
                         cfg.targetY = unrotatedX * Math.sin(cfg.rotation) + unrotatedY * Math.cos(cfg.rotation);
-                        cfg.nextChangeTime = now + 600 + Math.random() * 2400;
+
+                        cfg.nextChangeTime = now + 500 + Math.random() * 2500;
                     }
 
-                    cfg.currX += (cfg.targetX - cfg.currX) * 0.1;
-                    cfg.currY += (cfg.targetY - cfg.currY) * 0.1;
+                    if (shouldUpdateLerp) {
+                        cfg.currX += (cfg.targetX - cfg.currX) * 0.16;
+                        cfg.currY += (cfg.targetY - cfg.currY) * 0.16;
+                    }
 
                     const eyeImg = images[`eye_${cfg.id}`];
                     const boundImg = images[`eye_${cfg.id}_bound`];
@@ -443,30 +518,40 @@
                 currentEye.x += (targetEye.x - currentEye.x) * 0.15;
                 currentEye.y += (targetEye.y - currentEye.y) * 0.15;
 
-                // THỨ TỰ RENDER ĐÚNG NGUYÊN BẢN CỦA BẠN:
+                // 1. Nền
                 ctx.drawImage(images.bg, 0, 0, 1200, 900);
 
-                drawMaskedShade();
-                drawMaskedInside();
+                // 2 & 3. Cache shade + inside mask (chi tinh lai khi offset doi)
+                rebuildStaticMasksIfNeeded();
+                ctx.drawImage(shadeMaskCanvas, 0, 0, 1200, 900);
+                ctx.drawImage(insideMaskCanvas, 0, 0, 1200, 900);
+
+                // 4. Mắt phụ (Eye_01 - Eye_11) đảo mắt ngẫu nhiên, lerp o ~30fps
                 updateAndDrawExtraEyes(now);
+
+                // 5. Mắt chính follow cursor
                 drawClippedEye();
+
+                // 6. Dây len bị che bởi Left_Mask (van phai ve moi frame vi co animation)
                 drawMaskedThreads(now);
 
+                // 7. Bóng đổ mảng Left/Right (Multiply)
                 ctx.save();
                 ctx.globalCompositeOperation = 'multiply';
                 ctx.drawImage(images.leftShadow, -currentOffset, 0, 1200, 900);
                 ctx.drawImage(images.rightShadow, currentOffset, 0, 1200, 900);
                 ctx.restore();
 
+                // 8. Hai mảnh Left / Right phủ trên cùng
                 ctx.drawImage(images.left, -currentOffset, 0, 1200, 900);
                 ctx.drawImage(images.right, currentOffset, 0, 1200, 900);
 
+                // 9. Lớp phim cổ điển tối ưu hiệu năng (Pre-rendered)
                 drawOldFilmEffect(now);
 
                 requestAnimationFrame(renderLoop);
             }
 
-            // --- HÀM XỬ LÝ SỰ KIỆN NGUYÊN BẢN ---
             function getStagePos(e) {
                 const rect = canvas.getBoundingClientRect();
                 const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -475,6 +560,29 @@
                     x: (clientX - rect.left) * (1200 / rect.width),
                     y: (clientY - rect.top) * (900 / rect.height)
                 };
+            }
+
+            // === FIX #1 (tiep theo): TRA CUU ALPHA TU MANG DA TINH SAN, KHONG VE + KHONG getImageData ===
+            function checkHitRegion(x, y) {
+                const px = Math.floor(x);
+                const py = Math.floor(y);
+
+                if (px < 0 || px >= 1200 || py < 0 || py >= 900) return null;
+                if (!leftAlpha || !rightAlpha) return null; // chua load xong
+
+                // "left" duoc ve tai (-currentOffset, 0) => toa do goc trong anh = (px + currentOffset, py)
+                const leftSrcX = px + currentOffset;
+                if (leftSrcX >= 0 && leftSrcX < 1200) {
+                    if (leftAlpha[py * 1200 + leftSrcX] > 10) return 'left';
+                }
+
+                // "right" duoc ve tai (currentOffset, 0) => toa do goc trong anh = (px - currentOffset, py)
+                const rightSrcX = px - currentOffset;
+                if (rightSrcX >= 0 && rightSrcX < 1200) {
+                    if (rightAlpha[py * 1200 + rightSrcX] > 10) return 'right';
+                }
+
+                return null;
             }
 
             function onPointerDown(e) {
@@ -539,7 +647,7 @@
             }
 
             stage.addEventListener('mousedown', onPointerDown);
-            window.addEventListener('mousemove', onPointerMove, { passive: true });
+            window.addEventListener('mousemove', onPointerMove);
             window.addEventListener('mouseup', onPointerUp);
 
             stage.addEventListener('touchstart', onPointerDown, { passive: true });
