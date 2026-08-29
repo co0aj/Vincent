@@ -279,7 +279,6 @@
                 decodeCtx.clearRect(0, 0, 1200, 900);
                 decodeCtx.drawImage(img, 0, 0, 1200, 900);
                 const data = decodeCtx.getImageData(0, 0, 1200, 900).data;
-                // Chi luu kenh alpha (1 byte / pixel thay vi 4) de tiet kiem bo nho va tra cuu nhanh
                 const alpha = new Uint8ClampedArray(1200 * 900);
                 for (let i = 0, j = 3; i < alpha.length; i++, j += 4) {
                     alpha[i] = data[j];
@@ -287,15 +286,56 @@
                 return alpha;
             }
 
+            // === FIX #4: BOUNDING BOX CHO TUNG MAT - CHI COMPOSITE VUNG THUC SU CO PIXEL ===
+            // Thay vi ve/composite tren toan bo 1200x900 cho MOI con mat (x11 lan + mat chinh),
+            // ta tinh truoc vung chua pixel khong-trong-suot cua tung anh "bound", roi chi lam
+            // viec trong vung nho do. Day la nguyen nhan chinh gay cham tren iPhone vi fill-rate
+            // (so pixel phai to) tren canvas 2D cua Safari mobile rat han che.
+            function computeBBox(img, padding) {
+                if (padding === undefined) padding = 6;
+                decodeCtx.clearRect(0, 0, 1200, 900);
+                decodeCtx.drawImage(img, 0, 0, 1200, 900);
+                const data = decodeCtx.getImageData(0, 0, 1200, 900).data;
+                let minX = 1200, minY = 900, maxX = -1, maxY = -1;
+                // Quet theo hang, bo qua nhanh cac hang/cot rong de nhanh hon
+                for (let y = 0; y < 900; y++) {
+                    const rowBase = y * 1200 * 4;
+                    for (let x = 0; x < 1200; x++) {
+                        if (data[rowBase + x * 4 + 3] > 10) {
+                            if (x < minX) minX = x;
+                            if (x > maxX) maxX = x;
+                            if (y < minY) minY = y;
+                            if (y > maxY) maxY = y;
+                        }
+                    }
+                }
+                if (maxX < 0) return { x: 0, y: 0, w: 1200, h: 900 }; // anh rong toan bo, fallback an toan
+                minX = Math.max(0, minX - padding);
+                minY = Math.max(0, minY - padding);
+                maxX = Math.min(1199, maxX + padding);
+                maxY = Math.min(899, maxY + padding);
+                return { x: minX, y: minY, w: (maxX - minX + 1), h: (maxY - minY + 1) };
+            }
+
+            let eyeBoundBBox = null; // bbox cho mat chinh (Eye_Cursor_Bound)
+
             for (let key in imageSources) {
                 images[key] = new Image();
                 images[key].src = imageSources[key];
                 images[key].onload = () => {
                     loadedCount++;
                     if (loadedCount === totalImages) {
-                        // Build cac alpha map MOT LAN duy nhat, ngay khi anh load xong
+                        // Build cac alpha map va bounding box MOT LAN duy nhat, ngay khi anh load xong
                         leftAlpha = buildAlphaMap(images.left);
                         rightAlpha = buildAlphaMap(images.right);
+
+                        eyeBoundBBox = computeBBox(images.eyeBound, 16); // padding rong hon vi mat chinh di chuyen +-10px
+
+                        extraEyesConfig.forEach(cfg => {
+                            const boundImg = images[`eye_${cfg.id}_bound`];
+                            cfg.bbox = boundImg ? computeBBox(boundImg, 4) : { x: 0, y: 0, w: 1200, h: 900 };
+                        });
+
                         init();
                     }
                 };
@@ -461,12 +501,20 @@
             }
 
             function drawClippedEye() {
-                eyeClipCtx.clearRect(0, 0, 1200, 900);
-                eyeClipCtx.drawImage(images.eyeBound, 0, 0, 1200, 900);
+                // Chi lam viec trong bbox cua eyeBound thay vi toan bo 1200x900
+                const b = eyeBoundBBox || { x: 0, y: 0, w: 1200, h: 900 };
+
+                eyeClipCtx.clearRect(b.x, b.y, b.w, b.h);
+                eyeClipCtx.drawImage(images.eyeBound, b.x, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
                 eyeClipCtx.globalCompositeOperation = 'source-in';
-                eyeClipCtx.drawImage(images.eye, currentEye.x, currentEye.y, 1200, 900);
+                // Lay dung phan nguon cua anh "eye" tuong ung voi vung dich b, co tinh den do lech currentEye.x/y
+                eyeClipCtx.drawImage(
+                    images.eye,
+                    b.x - currentEye.x, b.y - currentEye.y, b.w, b.h,
+                    b.x, b.y, b.w, b.h
+                );
                 eyeClipCtx.globalCompositeOperation = 'source-over';
-                ctx.drawImage(eyeClipCanvas, 0, 0, 1200, 900);
+                ctx.drawImage(eyeClipCanvas, b.x, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
             }
 
             // === FIX #3 (BONUS): CAP NHAT MAT PHU O ~30FPS THAY VI 60FPS ===
@@ -500,13 +548,20 @@
                     const boundImg = images[`eye_${cfg.id}_bound`];
 
                     if (eyeImg && boundImg) {
-                        extraEyeClipCtx.clearRect(0, 0, 1200, 900);
-                        extraEyeClipCtx.drawImage(boundImg, 0, 0, 1200, 900);
+                        // Chi lam viec trong bbox rieng cua tung mat phu (thay vi 1200x900 full-canvas)
+                        const b = cfg.bbox || { x: 0, y: 0, w: 1200, h: 900 };
+
+                        extraEyeClipCtx.clearRect(b.x, b.y, b.w, b.h);
+                        extraEyeClipCtx.drawImage(boundImg, b.x, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
                         extraEyeClipCtx.globalCompositeOperation = 'source-in';
-                        extraEyeClipCtx.drawImage(eyeImg, cfg.currX, cfg.currY, 1200, 900);
+                        extraEyeClipCtx.drawImage(
+                            eyeImg,
+                            b.x - cfg.currX, b.y - cfg.currY, b.w, b.h,
+                            b.x, b.y, b.w, b.h
+                        );
                         extraEyeClipCtx.globalCompositeOperation = 'source-over';
 
-                        ctx.drawImage(extraEyeClipCanvas, 0, 0, 1200, 900);
+                        ctx.drawImage(extraEyeClipCanvas, b.x, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
                     }
                 });
             }
