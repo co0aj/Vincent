@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Vincent (WebGL/PixiJS)</title>
+    <title>Vincent</title>
 
     <style>
         :root {
@@ -51,28 +51,12 @@
             height: 100% !important;
             display: block;
         }
-
-        #fpsCounter {
-            position: absolute;
-            top: 8px;
-            left: 8px;
-            z-index: 20;
-            font-family: monospace;
-            font-size: 12px;
-            color: #0f0;
-            background: rgba(0, 0, 0, 0.5);
-            padding: 2px 6px;
-            border-radius: 4px;
-            pointer-events: none;
-        }
     </style>
 </head>
 
 <body>
     <div class="stage-wrap">
-        <div class="stage" id="stage">
-            <div id="fpsCounter">FPS: --</div>
-        </div>
+        <div class="stage" id="stage"></div>
     </div>
 
     <!-- PixiJS v7 (WebGL renderer). Neu can dung offline, tai file nay ve va tro toi local path. -->
@@ -81,8 +65,6 @@
     <script>
         (function () {
             const stageEl = document.getElementById('stage');
-            const fpsEl = document.getElementById('fpsCounter');
-
             const STAGE_W = 1200, STAGE_H = 900;
 
             // === CAU HINH LOGIC (GIU NGUYEN NHU BAN CANVAS 2D) ===
@@ -110,6 +92,7 @@
             ].map(cfg => ({ ...cfg, currX: 0, currY: 0, targetX: 0, targetY: 0, nextChangeTime: 0 }));
 
             let isDragging = false;
+            let isLoaded = false; // Đánh dấu khi hoàn tất load & khởi tạo
             let dragSource = null;
             let startStageX = 0;
             let currentOffset = 0;
@@ -124,15 +107,10 @@
             const app = new PIXI.Application({
                 width: STAGE_W,
                 height: STAGE_H,
-                // QUAN TRONG: dung nen DAC (khong trong suot) trung mau voi .stage (#1c1c1c) thay vi
-                // backgroundAlpha:0. Canvas WebGL trong suot bi Safari/iOS composite sai (premultiplied
-                // alpha) o cac vung co alpha ban trong suot, gay hien tuong mau bi nhat/bac di - day
-                // chinh la nguyen nhan cac mat phu bi nhat mau. Vi lop "bg" da phu kin toan bo khung
-                // hinh nen doi sang nen dac khong lam thay doi hinh anh, chi loai bo duong compositing loi.
                 backgroundColor: 0x1c1c1c,
                 backgroundAlpha: 1,
                 antialias: true,
-                resolution: 1,          // giu 1:1, khong nhan them theo devicePixelRatio de tiet kiem fill-rate tren may yeu
+                resolution: 1,
                 autoDensity: false,
                 powerPreference: 'high-performance',
             });
@@ -146,10 +124,10 @@
             }
 
             // ==========================================
-            // 2) LOAD ANH (GIU CACH LOAD GIONG BAN CU DE TUONG THICH imagesData.js)
+            // 2) LOAD ANH
             // ==========================================
-            const rawImages = {}; // HTMLImageElement, dung tam de build texture + hit-test alpha
-            const textures = {};  // PIXI.Texture
+            const rawImages = {};
+            const textures = {};
 
             const imageSources = {
                 bg: IMAGE_DATA.Background,
@@ -185,7 +163,7 @@
             }
 
             // ==========================================
-            // 3) HIT-TEST: MANG ALPHA TIEN TINH (khong dinh gi den WebGL, chi doc pixel 1 lan luc load)
+            // 3) HIT-TEST: MANG ALPHA TIEN TINH
             // ==========================================
             const hitCanvas = document.createElement('canvas');
             hitCanvas.width = STAGE_W; hitCanvas.height = STAGE_H;
@@ -202,10 +180,7 @@
             }
 
             // ==========================================
-            // 4) DUNG RENDER TEXTURE + BLEND MODE ERASE/MULTIPLY (GPU) DE THAY THE
-            //    cho "destination-out" / "multiply" cua canvas 2D truoc day.
-            //    Cac lop nay chi phu thuoc currentOffset (khong animation) nen chi
-            //    render lai vao RenderTexture khi offset thuc su thay doi.
+            // 4) DUNG RENDER TEXTURE + BLEND MODE ERASE/MULTIPLY (GPU)
             // ==========================================
             let lastCachedOffset = null;
 
@@ -221,14 +196,12 @@
             let leftPieceSprite, rightPieceSprite;
 
             function buildCompositors() {
-                // --- Shade bi cat bang Right_Mask (destination-out -> ERASE) ---
                 shadeSprite = new PIXI.Sprite(textures.shade);
                 shadeMaskSprite = new PIXI.Sprite(textures.rightMask);
                 shadeMaskSprite.blendMode = PIXI.BLEND_MODES.ERASE;
                 shadeContainer = new PIXI.Container();
                 shadeContainer.addChild(shadeSprite, shadeMaskSprite);
 
-                // --- Inside bi cat boi ca Left_Mask va Right_Mask ---
                 insideSprite = new PIXI.Sprite(textures.inside);
                 insideLeftMaskSprite = new PIXI.Sprite(textures.leftMask);
                 insideLeftMaskSprite.blendMode = PIXI.BLEND_MODES.ERASE;
@@ -237,14 +210,12 @@
                 insideContainer = new PIXI.Container();
                 insideContainer.addChild(insideSprite, insideLeftMaskSprite, insideRightMaskSprite);
 
-                // --- Left_Shadow x Right_Shadow gop lam 1 (multiply giua 2 anh) ---
                 leftShadowSprite = new PIXI.Sprite(textures.leftShadow);
                 rightShadowSprite = new PIXI.Sprite(textures.rightShadow);
                 rightShadowSprite.blendMode = PIXI.BLEND_MODES.MULTIPLY;
                 shadowContainer = new PIXI.Container();
                 shadowContainer.addChild(leftShadowSprite, rightShadowSprite);
 
-                // --- Left + Right gop lam 1 (khong blend, chi la 2 lop chong) ---
                 leftPieceSprite = new PIXI.Sprite(textures.left);
                 rightPieceSprite = new PIXI.Sprite(textures.right);
                 leftRightContainer = new PIXI.Container();
@@ -275,17 +246,10 @@
             }
 
             // ==========================================
-            // 5) MAT CHINH + 11 MAT PHU: DUNG RENDERTEXTURE + BLEND MODE 'SRC_IN' (giong het canvas
-            //    'source-in') THAY VI sprite.mask CUA PIXI. Ly do: co che .mask cua Pixi chay qua mot
-            //    filter pass rieng va xu ly alpha khac di, gay nhat mau. Dung RenderTexture + SRC_IN
-            //    (cung ho blend-mode family voi ERASE dang dung cho shade/inside, da xac nhan dung mau)
-            //    de dam bao ket qua giong het ban Canvas 2D.
-            //
-            //    TOI UU FPS: moi RenderTexture chi to bang BOUNDING BOX cua anh "bound" tuong ung
-            //    (thay vi full 1200x900), giam khoi luong GPU phai xu ly cho ca 12 mat moi frame.
+            // 5) MAT CHINH + 11 MAT PHU
             // ==========================================
             let eyeResultSprite, eyeContentSprite, eyeBBox, eyeCompositeContainer, eyeRT;
-            const extraEyeEntries = []; // { compositeContainer, contentSprite, resultSprite, rt, cfg, bbox }
+            const extraEyeEntries = [];
 
             function computeBBox(img, padding) {
                 if (padding === undefined) padding = 6;
@@ -313,20 +277,18 @@
             }
 
             function buildEyes() {
-                // --- Mat chinh (padding rong hon vi di chuyen +-10px theo cursor) ---
                 eyeBBox = computeBBox(rawImages.eyeBound, 16);
                 const eyeBoundForComposite = new PIXI.Sprite(textures.eyeBound);
                 eyeBoundForComposite.position.set(-eyeBBox.x, -eyeBBox.y);
                 eyeContentSprite = new PIXI.Sprite(textures.eye);
-                eyeContentSprite.blendMode = PIXI.BLEND_MODES.SRC_IN; // giu lai mau/alpha cua eye, chi trong pham vi bound co alpha
+                eyeContentSprite.blendMode = PIXI.BLEND_MODES.SRC_IN;
                 eyeCompositeContainer = new PIXI.Container();
                 eyeCompositeContainer.addChild(eyeBoundForComposite, eyeContentSprite);
 
                 eyeRT = PIXI.RenderTexture.create({ width: eyeBBox.w, height: eyeBBox.h });
-                eyeResultSprite = new PIXI.Sprite(eyeRT); // sprite them vao app.stage
+                eyeResultSprite = new PIXI.Sprite(eyeRT);
                 eyeResultSprite.position.set(eyeBBox.x, eyeBBox.y);
 
-                // --- 11 mat phu (padding vua du cho bien do di chuyen +-12px cua radiusX/radiusY) ---
                 extraEyesConfig.forEach(cfg => {
                     const boundImg = rawImages[`eye_${cfg.id}_bound`];
                     const bbox = computeBBox(boundImg, 16);
@@ -348,12 +310,9 @@
             }
 
             function renderEyesThisFrame() {
-                // Mat chinh: vi tri thay doi moi frame (lerp theo cursor) nen phai render lai RT moi frame
-                // Vi tri content phai tru di bbox.x/y de dung toa do cuc bo cua RT nho
                 eyeContentSprite.position.set(currentEye.x - eyeBBox.x, currentEye.y - eyeBBox.y);
                 app.renderer.render(eyeCompositeContainer, { renderTexture: eyeRT, clear: true });
 
-                // 11 mat phu: vi tri cung lerp moi frame -> render lai moi frame
                 extraEyeEntries.forEach(entry => {
                     entry.contentSprite.position.set(
                         entry.cfg.currX - entry.bbox.x,
@@ -364,15 +323,12 @@
             }
 
             // ==========================================
-            // 6) DAY LEN: VE BANG PIXI.Graphics (GPU tessellation) MOI FRAME,
-            //    ROI ERASE BOI Left_Mask VAO MOT RENDER TEXTURE (van animate nen phai lam moi frame,
-            //    nhung gio la GPU thay vi CPU fill).
+            // 6) DAY LEN
             // ==========================================
             let threads = [];
             let yarnGraphics, threadsLeftMaskSprite, threadsContainer;
             const threadsRT = PIXI.RenderTexture.create({ width: STAGE_W, height: STAGE_H });
 
-            // === HELPER: DIEM TREN DUONG BEZIER TAI THAM SO t (0..1) ===
             function bezierPointAt(t, x0, y0, cp1x, cp1y, cp2x, cp2y, x1, y1) {
                 const mt = 1 - t;
                 return {
@@ -381,12 +337,6 @@
                 };
             }
 
-            // === HELPER: TINH MOC DASH (theo tham so t, 0..1) MOT LAN DUY NHAT tu mot hinh dang
-            //    "dai dien" luc setup. Vi day chi la MOC THAM SO co dinh (khong phai do dai pixel
-            //    thuc te moi frame), khi soi day sau nay dong dua (sag/pulse doi theo thoi gian),
-            //    hoa van se DI CHUYEN CUNG VOI VAT LIEU (giong nhu son ve len soi day that) thay vi
-            //    "chay" doc theo day nhu ban truoc (do truoc day tinh lai tu dau moi frame theo do
-            //    dai cung thuc te, ma do dai nay bien thien lien tuc vi soi day dong dua).
             function computeDashBreakpoints(x0, y0, cp1x, cp1y, cp2x, cp2y, x1, y1, dashLen, gapLen) {
                 const SEGMENTS = 200;
                 let breakpoints = [0];
@@ -407,18 +357,16 @@
                     prev = pt;
                 }
                 breakpoints.push(1);
-                return breakpoints; // t=0..breakpoints[1] la "on", breakpoints[1]..breakpoints[2] la "off", xen ke
+                return breakpoints;
             }
 
-            // === VE NET DUT THEO MOC THAM SO CO DINH, NHUNG DUNG TOA DO SONG (LIVE) MOI FRAME ===
             function drawDashedFromBreakpoints(g, breakpoints, x0, y0, cp1x, cp1y, cp2x, cp2y, x1, y1, lineWidth, color, alpha) {
                 g.lineStyle(lineWidth, color, alpha);
                 for (let i = 0; i < breakpoints.length - 1; i++) {
-                    const isOn = (i % 2 === 0); // bat dau tu "on"
+                    const isOn = (i % 2 === 0);
                     if (!isOn) continue;
                     const tStart = breakpoints[i];
                     const tEnd = breakpoints[i + 1];
-                    // Chia nho doan [tStart,tEnd] thanh vai buoc de bam sat duong cong (khong chi 1 doan thang)
                     const STEPS = 3;
                     const p0 = bezierPointAt(tStart, x0, y0, cp1x, cp1y, cp2x, cp2y, x1, y1);
                     g.moveTo(p0.x, p0.y);
@@ -457,8 +405,6 @@
                     const curveFactor2 = (Math.random() - 0.5) * 1.5;
                     const phaseShift = Math.random() * Math.PI * 2;
 
-                    // Tinh mot hinh dang "dai dien" (offset=0, thoi diem t=0) chi de lam co so
-                    // tinh moc dash CO DINH theo tham so t - khong dung de ve thuc te.
                     const nomLx = pLeft.x, nomLy = pLeft.y, nomRx = pRight.x, nomRy = pRight.y;
                     const nomStraightDist = initialDist;
                     const nomSlack = Math.max(0, totalLength - nomStraightDist);
@@ -512,15 +458,15 @@
                     g.moveTo(lx, ly + 4);
                     g.bezierCurveTo(cp1x, cp1y + 4, cp2x, cp2y + 4, rx, ry + 4);
 
-                    // 2. Than day len chinh (co bo tron dau net, giong lineCap='round' cua ban goc)
+                    // 2. Than day len chinh
                     g.lineStyle({ width: 4.5, color: t.baseColor, alpha: 1, cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND });
                     g.moveTo(lx, ly);
                     g.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, rx, ry);
 
-                    // 3. Vien sang net dut - dung MOC CO DINH (khong tinh lai theo do dai moi frame)
+                    // 3. Vien sang net dut
                     drawDashedFromBreakpoints(g, t.dashBreakpoints1, lx, ly, cp1x, cp1y, cp2x, cp2y, rx, ry, 2, 0xffffff, 0.25);
 
-                    // 4. Lop toi net dut tao cam giac xoan - cung dung moc co dinh
+                    // 4. Lop toi net dut
                     drawDashedFromBreakpoints(g, t.dashBreakpoints2, lx - 1, ly - 1, cp1x - 1, cp1y - 1, cp2x - 1, cp2y - 1, rx - 1, ry - 1, 2, 0x000000, 0.3);
 
                     // 5. Fuzz
@@ -539,8 +485,7 @@
             }
 
             // ==========================================
-            // 7) HIEU UNG PHIM CU: PRE-RENDER 10 FRAME NHIEU/VET XUOC/VIGNETTE (canvas 2D,
-            //    nhung chi lam MOT LAN luc khoi tao, sau do upload thanh PIXI.Texture, GPU chi blit).
+            // 7) HIEU UNG PHIM CU
             // ==========================================
             const FILM_FRAME_COUNT = 10;
             const filmTextures = [];
@@ -615,7 +560,7 @@
             }
 
             // ==========================================
-            // 8) LAP RAP SCENE GRAPH (THU TU LOP GIONG HET BAN CANVAS 2D)
+            // 8) SCENE GRAPH & MAIN LOOP
             // ==========================================
             function onAllLoaded() {
                 leftAlpha = buildAlphaMap(rawImages.left);
@@ -635,24 +580,19 @@
                 shadowSpriteOnStage.blendMode = PIXI.BLEND_MODES.MULTIPLY;
                 const leftRightSpriteOnStage = new PIXI.Sprite(leftRightRT);
 
-                app.stage.addChild(bgSprite);           // 1. Nen
-                app.stage.addChild(shadeMaskedSprite);   // 2. Shade bi che
-                app.stage.addChild(insideMaskedSprite);  // 3. Inside bi che
-                extraEyeEntries.forEach(e => app.stage.addChild(e.resultSprite)); // 4. Mat phu
-                app.stage.addChild(eyeResultSprite);     // 5. Mat chinh
-                app.stage.addChild(threadsMaskedSprite); // 6. Day len
-                app.stage.addChild(shadowSpriteOnStage); // 7. Bong do (multiply)
-                app.stage.addChild(leftRightSpriteOnStage); // 8. Left/Right
-                app.stage.addChild(filmSprite);          // 9. Phim cu
+                app.stage.addChild(bgSprite);
+                app.stage.addChild(shadeMaskedSprite);
+                app.stage.addChild(insideMaskedSprite);
+                extraEyeEntries.forEach(e => app.stage.addChild(e.resultSprite));
+                app.stage.addChild(eyeResultSprite);
+                app.stage.addChild(threadsMaskedSprite);
+                app.stage.addChild(shadowSpriteOnStage);
+                app.stage.addChild(leftRightSpriteOnStage);
+                app.stage.addChild(filmSprite);
 
-                // === FPS COUNTER DE BAN SO SANH TRUC TIEP VOI BAN CANVAS 2D ===
-                let frames = 0, fpsTimer = 0;
-
-                app.ticker.add((delta) => {
+                app.ticker.add(() => {
                     const now = performance.now();
-                    const dt = app.ticker.deltaMS;
 
-                    // Lerp mat chinh + mat phu
                     currentEye.x += (targetEye.x - currentEye.x) * 0.15;
                     currentEye.y += (targetEye.y - currentEye.y) * 0.15;
                     eyeContentSprite.position.set(currentEye.x, currentEye.y);
@@ -672,19 +612,14 @@
                         extraEyeEntries[idx].contentSprite.position.set(cfg.currX, cfg.currY);
                     });
 
-                    // Ve lai RenderTexture cua mat chinh + 11 mat phu (SRC_IN, giong het canvas source-in)
                     renderEyesThisFrame();
-
-                    // Cac lop tinh theo offset: chi rebuild khi offset doi
                     rebuildStaticLayersIfNeeded(false);
 
-                    // Day len: animate moi frame (van can render lai RT vi co chuyen dong)
                     drawYarnThreads(yarnGraphics, now);
                     threadsLeftMaskSprite.x = -currentOffset;
                     app.renderer.render(threadsContainer, { renderTexture: threadsRT, clear: true });
                     threadsMaskedSprite.texture = threadsRT;
 
-                    // Phim cu: doi frame ~12.5fps + rung nhe
                     if (now - lastFrameChangeTime > 80) {
                         currentFilmFrameIndex = (currentFilmFrameIndex + 1) % FILM_FRAME_COUNT;
                         lastFrameChangeTime = now;
@@ -692,25 +627,19 @@
                     filmSprite.texture = filmTextures[currentFilmFrameIndex];
                     filmSprite.y = (Math.random() - 0.5) * 1.2;
                     filmSprite.alpha = Math.random() < 0.3 ? (0.92 + Math.random() * 0.08) : 1;
-
-                    // FPS counter
-                    frames++;
-                    fpsTimer += dt;
-                    if (fpsTimer >= 500) {
-                        fpsEl.textContent = 'FPS: ' + Math.round((frames * 1000) / fpsTimer);
-                        frames = 0;
-                        fpsTimer = 0;
-                    }
                 });
+
+                // Đánh dấu tài nguyên đã sẵn sàng cho tương tác
+                isLoaded = true;
             }
 
             // ==========================================
-            // 9) INPUT: GIU NGUYEN LOGIC KEO THA + HIT-TEST NHU BAN CU
+            // 9) INPUT: XỬ LÝ SỰ KIỆN KÉO THẢ VÀ AN TOÀN TRẠNG THÁI
             // ==========================================
             function getStagePos(e) {
                 const rect = app.view.getBoundingClientRect();
-                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches && e.touches.length > 0 ? e.touches[0].clientY : e.clientY;
                 return {
                     x: (clientX - rect.left) * (STAGE_W / rect.width),
                     y: (clientY - rect.top) * (STAGE_H / rect.height)
@@ -718,9 +647,9 @@
             }
 
             function checkHitRegion(x, y) {
+                if (!isLoaded || !leftAlpha || !rightAlpha) return null;
                 const px = Math.floor(x), py = Math.floor(y);
                 if (px < 0 || px >= STAGE_W || py < 0 || py >= STAGE_H) return null;
-                if (!leftAlpha || !rightAlpha) return null;
 
                 const leftSrcX = px + currentOffset;
                 if (leftSrcX >= 0 && leftSrcX < STAGE_W) {
@@ -734,6 +663,7 @@
             }
 
             function onPointerDown(e) {
+                if (!isLoaded) return;
                 const pos = getStagePos(e);
                 const hitTarget = checkHitRegion(pos.x, pos.y);
                 if (hitTarget) {
@@ -746,6 +676,7 @@
             }
 
             function onPointerMove(e) {
+                if (!isLoaded) return;
                 const pos = getStagePos(e);
                 updateEyePosition(pos.x, pos.y);
 
@@ -785,12 +716,18 @@
                 targetEye.y = rawTargetY;
             }
 
+            // Gắn sự kiện lắng nghe chuột & cảm ứng
             stageEl.addEventListener('mousedown', onPointerDown);
             window.addEventListener('mousemove', onPointerMove);
             window.addEventListener('mouseup', onPointerUp);
+
             stageEl.addEventListener('touchstart', onPointerDown, { passive: true });
             window.addEventListener('touchmove', onPointerMove, { passive: true });
             window.addEventListener('touchend', onPointerUp);
+
+            // Bổ sung các sự kiện nhả/hủy tương tác ngoại lệ để chống kẹt isDragging
+            window.addEventListener('touchcancel', onPointerUp);
+            window.addEventListener('mouseleave', onPointerUp);
         })();
     </script>
 </body>
