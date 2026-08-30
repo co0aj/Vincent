@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Vincent</title>
+    <title>Vincent (WebGL/PixiJS)</title>
 
     <style>
         :root {
@@ -46,25 +46,24 @@
             user-select: none;
         }
 
-        .gif-multiply {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            object-position: center;
-            transform-origin: center;
-            will-change: transform;
-            pointer-events: none;
-            z-index: 10;
-            mix-blend-mode: multiply;
+        .stage canvas {
+            width: 100% !important;
+            height: 100% !important;
+            display: block;
         }
 
-        #mainCanvas {
-            width: 100%;
-            height: 100%;
-            display: block;
+        #fpsCounter {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            z-index: 20;
+            font-family: monospace;
+            font-size: 12px;
+            color: #0f0;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 2px 6px;
+            border-radius: 4px;
+            pointer-events: none;
         }
     </style>
 </head>
@@ -72,147 +71,43 @@
 <body>
     <div class="stage-wrap">
         <div class="stage" id="stage">
-            <canvas id="mainCanvas" width="1200" height="900"></canvas>
+            <div id="fpsCounter">FPS: --</div>
         </div>
     </div>
+
+    <!-- PixiJS v7 (WebGL renderer). Neu can dung offline, tai file nay ve va tro toi local path. -->
+    <script src="https://cdn.jsdelivr.net/npm/pixi.js@7.4.2/dist/pixi.min.js"></script>
     <script src="imagesData.js"></script>
     <script>
         (function () {
-            const stage = document.getElementById('stage');
-            const canvas = document.getElementById('mainCanvas');
-            const ctx = canvas.getContext('2d');
+            const stageEl = document.getElementById('stage');
+            const fpsEl = document.getElementById('fpsCounter');
 
-            // --- OFFSCREEN CANVAS CHO MASKING (KHONG DUNG CHO HIT-TEST NUA) ---
-            const eyeClipCanvas = createOffscreenCanvas();
-            const eyeClipCtx = eyeClipCanvas.getContext('2d');
+            const STAGE_W = 1200, STAGE_H = 900;
 
-            const extraEyeClipCanvas = createOffscreenCanvas();
-            const extraEyeClipCtx = extraEyeClipCanvas.getContext('2d');
-
-            const insideMaskCanvas = createOffscreenCanvas();
-            const insideMaskCtx = insideMaskCanvas.getContext('2d');
-
-            // Canvas phụ xử lý Shade + Right_Mask
-            const shadeMaskCanvas = createOffscreenCanvas();
-            const shadeMaskCtx = shadeMaskCanvas.getContext('2d');
-
-            // Canvas phụ xử lý Dây Len + Left_Mask
-            const threadsCanvas = createOffscreenCanvas();
-            const threadsCtx = threadsCanvas.getContext('2d');
-
-            // Canvas tạm 1 lần dùng để đọc alpha data khi ảnh vừa load xong
-            const decodeCanvas = createOffscreenCanvas();
-            const decodeCtx = decodeCanvas.getContext('2d', { willReadFrequently: true });
-
-            function createOffscreenCanvas() {
-                const c = document.createElement('canvas');
-                c.width = 1200;
-                c.height = 900;
-                return c;
-            }
-
-            // ==========================================
-            // PRE-RENDER FILM EFFECT (SIÊU TỐI ƯU HIỆU NĂNG)
-            // ==========================================
-            const FILM_FRAME_COUNT = 10;
-            const filmFrames = [];
-            let currentFilmFrameIndex = 0;
-            let lastFrameChangeTime = 0;
-
-            function initOptimizedFilmEffect() {
-                for (let f = 0; f < FILM_FRAME_COUNT; f++) {
-                    const fCanvas = createOffscreenCanvas();
-                    const fCtx = fCanvas.getContext('2d');
-
-                    fCtx.fillStyle = 'rgba(112, 66, 20, 0.12)';
-                    fCtx.fillRect(0, 0, 1200, 900);
-
-                    const noiseData = fCtx.createImageData(1200, 900);
-                    const data = noiseData.data;
-                    for (let i = 0; i < data.length; i += 4) {
-                        if (Math.random() < 0.12) {
-                            const n = Math.random() * 255;
-                            data[i] = n;
-                            data[i + 1] = n;
-                            data[i + 2] = n;
-                            data[i + 3] = 16;
-                        }
-                    }
-                    fCtx.putImageData(noiseData, 0, 0);
-
-                    const scratchCount = Math.floor(Math.random() * 2) + 2;
-                    for (let s = 0; s < scratchCount; s++) {
-                        const sx = Math.random() * 1200;
-                        fCtx.strokeStyle = `rgba(15, 15, 15, ${0.15 + Math.random() * 0.25})`;
-                        fCtx.lineWidth = 0.6 + Math.random() * 1.2;
-                        fCtx.beginPath();
-                        fCtx.moveTo(sx + (Math.random() - 0.5) * 3, 0);
-                        fCtx.lineTo(sx + (Math.random() - 0.5) * 3, 900);
-                        fCtx.stroke();
-                    }
-
-                    const dustCount = Math.floor(Math.random() * 14) + 4;
-                    fCtx.fillStyle = 'rgba(10, 10, 10, 0.65)';
-                    for (let d = 0; d < dustCount; d++) {
-                        fCtx.beginPath();
-                        fCtx.arc(Math.random() * 1200, Math.random() * 900, 0.8 + Math.random() * 1.5, 0, Math.PI * 2);
-                        fCtx.fill();
-                    }
-
-                    if (Math.random() < 0.4) {
-                        fCtx.strokeStyle = 'rgba(10, 10, 10, 0.75)';
-                        fCtx.lineWidth = 1.0;
-                        const hx = Math.random() * 1200;
-                        const hy = Math.random() * 900;
-                        fCtx.beginPath();
-                        fCtx.moveTo(hx, hy);
-                        fCtx.quadraticCurveTo(hx + 10, hy + 15, hx + (Math.random() - 0.5) * 30, hy + 25);
-                        fCtx.stroke();
-                    }
-
-                    const vigGrad = fCtx.createRadialGradient(600, 450, 380, 600, 450, 720);
-                    vigGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
-                    vigGrad.addColorStop(0.7, 'rgba(0, 0, 0, 0.35)');
-                    vigGrad.addColorStop(0.92, 'rgba(10, 10, 10, 0.8)');
-                    vigGrad.addColorStop(1, 'rgba(0, 0, 0, 0.98)');
-
-                    fCtx.fillStyle = vigGrad;
-                    fCtx.fillRect(0, 0, 1200, 900);
-
-                    fCtx.lineWidth = 20;
-                    fCtx.strokeStyle = 'rgba(0, 0, 0, 0.95)';
-                    fCtx.strokeRect(0, 0, 1200, 900);
-
-                    filmFrames.push(fCanvas);
-                }
-            }
-
-            function drawOldFilmEffect(now) {
-                if (now - lastFrameChangeTime > 80) {
-                    currentFilmFrameIndex = (currentFilmFrameIndex + 1) % FILM_FRAME_COUNT;
-                    lastFrameChangeTime = now;
-                }
-
-                ctx.save();
-                const jitterY = (Math.random() - 0.5) * 1.2;
-
-                if (Math.random() < 0.3) {
-                    ctx.globalAlpha = 0.92 + Math.random() * 0.08;
-                }
-
-                ctx.drawImage(filmFrames[currentFilmFrameIndex], 0, jitterY, 1200, 900);
-                ctx.restore();
-            }
-
-            // --- CẤU HÌNH LOGIC BAN ĐẦU ---
+            // === CAU HINH LOGIC (GIU NGUYEN NHU BAN CANVAS 2D) ===
             const EYE_CONFIG = { centerX: 600, centerY: 355, maxRadius: 10 };
             const MAX_DRAG_DIST = 190;
             const MIN_EXTRA_LENGTH = 2000;
             const THREAD_COUNT = 7;
             const THREAD_MIN_Y = 150;
             const THREAD_MAX_Y = 800;
+            const YARN_COLORS = [0x9D1C14, 0xC41B0D, 0xD95505];
+            const EXTRA_EYES_COUNT = 11;
 
-            const YARN_COLORS = ['#9D1C14', '#C41B0D', '#D95505'];
+            const extraEyesConfig = [
+                { id: '01', radiusX: 12, radiusY: 8, rotation: -30 * Math.PI / 180 },
+                { id: '02', radiusX: 12, radiusY: 8, rotation: 0 },
+                { id: '03', radiusX: 12, radiusY: 8, rotation: -45 * Math.PI / 180 },
+                { id: '04', radiusX: 12, radiusY: 8, rotation: 0 },
+                { id: '05', radiusX: 12, radiusY: 8, rotation: -35 * Math.PI / 180 },
+                { id: '06', radiusX: 12, radiusY: 8, rotation: 0 },
+                { id: '07', radiusX: 12, radiusY: 8, rotation: -45 * Math.PI / 180 },
+                { id: '08', radiusX: 12, radiusY: 8, rotation: 0 },
+                { id: '09', radiusX: 12, radiusY: 8, rotation: -45 * Math.PI / 180 },
+                { id: '10', radiusX: 12, radiusY: 8, rotation: -40 * Math.PI / 180 },
+                { id: '11', radiusX: 12, radiusY: 8, rotation: -20 * Math.PI / 180 },
+            ].map(cfg => ({ ...cfg, currX: 0, currY: 0, targetX: 0, targetY: 0, nextChangeTime: 0 }));
 
             let isDragging = false;
             let dragSource = null;
@@ -223,7 +118,38 @@
             let targetEye = { x: 0, y: 0 };
             let currentEye = { x: 0, y: 0 };
 
-            const images = {};
+            // ==========================================
+            // 1) KHOI TAO PIXI APPLICATION (WEBGL)
+            // ==========================================
+            const app = new PIXI.Application({
+                width: STAGE_W,
+                height: STAGE_H,
+                // QUAN TRONG: dung nen DAC (khong trong suot) trung mau voi .stage (#1c1c1c) thay vi
+                // backgroundAlpha:0. Canvas WebGL trong suot bi Safari/iOS composite sai (premultiplied
+                // alpha) o cac vung co alpha ban trong suot, gay hien tuong mau bi nhat/bac di - day
+                // chinh la nguyen nhan cac mat phu bi nhat mau. Vi lop "bg" da phu kin toan bo khung
+                // hinh nen doi sang nen dac khong lam thay doi hinh anh, chi loai bo duong compositing loi.
+                backgroundColor: 0x1c1c1c,
+                backgroundAlpha: 1,
+                antialias: true,
+                resolution: 1,          // giu 1:1, khong nhan them theo devicePixelRatio de tiet kiem fill-rate tren may yeu
+                autoDensity: false,
+                powerPreference: 'high-performance',
+            });
+            stageEl.appendChild(app.view);
+            app.view.style.position = 'absolute';
+            app.view.style.top = '0';
+            app.view.style.left = '0';
+
+            if (!app.renderer || app.renderer.type !== PIXI.RENDERER_TYPE.WEBGL) {
+                console.warn('PixiJS dang fallback ve Canvas renderer thay vi WebGL. Hieu nang se khong duoc cai thien nhu mong doi.');
+            }
+
+            // ==========================================
+            // 2) LOAD ANH (GIU CACH LOAD GIONG BAN CU DE TUONG THICH imagesData.js)
+            // ==========================================
+            const rawImages = {}; // HTMLImageElement, dung tam de build texture + hit-test alpha
+            const textures = {};  // PIXI.Texture
 
             const imageSources = {
                 bg: IMAGE_DATA.Background,
@@ -238,69 +164,138 @@
                 leftMask: IMAGE_DATA.Left_Mask,
                 rightMask: IMAGE_DATA.Right_Mask,
             };
-
-            const EXTRA_EYES_COUNT = 11;
             for (let i = 1; i <= EXTRA_EYES_COUNT; i++) {
                 const numStr = String(i).padStart(2, '0');
                 imageSources[`eye_${numStr}`] = IMAGE_DATA[`Eye_${numStr}`];
                 imageSources[`eye_${numStr}_bound`] = IMAGE_DATA[`Eye_${numStr}_Bound`];
             }
 
-            const extraEyesConfig = [
-                { id: '01', radiusX: 12, radiusY: 8, rotation: -30 * Math.PI / 180 },
-                { id: '02', radiusX: 12, radiusY: 8, rotation: 0 },
-                { id: '03', radiusX: 12, radiusY: 8, rotation: -45 * Math.PI / 180 },
-                { id: '04', radiusX: 12, radiusY: 8, rotation: 0 },
-                { id: '05', radiusX: 12, radiusY: 8, rotation: -35 * Math.PI / 180 },
-                { id: '06', radiusX: 12, radiusY: 8, rotation: 0 },
-                { id: '07', radiusX: 12, radiusY: 8, rotation: -45 * Math.PI / 180 },
-                { id: '08', radiusX: 12, radiusY: 8, rotation: 0 },
-                { id: '09', radiusX: 12, radiusY: 8, rotation: -45 * Math.PI / 180 },
-                { id: '10', radiusX: 12, radiusY: 8, rotation: -40 * Math.PI / 180 },
-                { id: '11', radiusX: 12, radiusY: 8, rotation: -20 * Math.PI / 180 },
-            ].map(cfg => ({
-                ...cfg,
-                currX: 0,
-                currY: 0,
-                targetX: 0,
-                targetY: 0,
-                nextChangeTime: 0
-            }));
-
             let loadedCount = 0;
             const totalImages = Object.keys(imageSources).length;
-            let threads = [];
 
-            // === FIX #1: HIT-TEST BANG MANG ALPHA TIEN TINH (khong dung getImageData moi frame) ===
-            let leftAlpha = null;   // Uint8ClampedArray, alpha cua images.left tai vi tri goc (offset = 0)
-            let rightAlpha = null;  // Uint8ClampedArray, alpha cua images.right tai vi tri goc (offset = 0)
+            for (let key in imageSources) {
+                const img = new Image();
+                rawImages[key] = img;
+                img.src = imageSources[key];
+                img.onload = () => {
+                    textures[key] = PIXI.Texture.from(img);
+                    loadedCount++;
+                    if (loadedCount === totalImages) onAllLoaded();
+                };
+            }
+
+            // ==========================================
+            // 3) HIT-TEST: MANG ALPHA TIEN TINH (khong dinh gi den WebGL, chi doc pixel 1 lan luc load)
+            // ==========================================
+            const hitCanvas = document.createElement('canvas');
+            hitCanvas.width = STAGE_W; hitCanvas.height = STAGE_H;
+            const hitCtx = hitCanvas.getContext('2d', { willReadFrequently: true });
+            let leftAlpha = null, rightAlpha = null;
 
             function buildAlphaMap(img) {
-                decodeCtx.clearRect(0, 0, 1200, 900);
-                decodeCtx.drawImage(img, 0, 0, 1200, 900);
-                const data = decodeCtx.getImageData(0, 0, 1200, 900).data;
-                const alpha = new Uint8ClampedArray(1200 * 900);
-                for (let i = 0, j = 3; i < alpha.length; i++, j += 4) {
-                    alpha[i] = data[j];
-                }
+                hitCtx.clearRect(0, 0, STAGE_W, STAGE_H);
+                hitCtx.drawImage(img, 0, 0, STAGE_W, STAGE_H);
+                const data = hitCtx.getImageData(0, 0, STAGE_W, STAGE_H).data;
+                const alpha = new Uint8ClampedArray(STAGE_W * STAGE_H);
+                for (let i = 0, j = 3; i < alpha.length; i++, j += 4) alpha[i] = data[j];
                 return alpha;
             }
 
-            // === FIX #4: BOUNDING BOX CHO TUNG MAT - CHI COMPOSITE VUNG THUC SU CO PIXEL ===
-            // Thay vi ve/composite tren toan bo 1200x900 cho MOI con mat (x11 lan + mat chinh),
-            // ta tinh truoc vung chua pixel khong-trong-suot cua tung anh "bound", roi chi lam
-            // viec trong vung nho do. Day la nguyen nhan chinh gay cham tren iPhone vi fill-rate
-            // (so pixel phai to) tren canvas 2D cua Safari mobile rat han che.
+            // ==========================================
+            // 4) DUNG RENDER TEXTURE + BLEND MODE ERASE/MULTIPLY (GPU) DE THAY THE
+            //    cho "destination-out" / "multiply" cua canvas 2D truoc day.
+            //    Cac lop nay chi phu thuoc currentOffset (khong animation) nen chi
+            //    render lai vao RenderTexture khi offset thuc su thay doi.
+            // ==========================================
+            let lastCachedOffset = null;
+
+            const shadeRT = PIXI.RenderTexture.create({ width: STAGE_W, height: STAGE_H });
+            const insideRT = PIXI.RenderTexture.create({ width: STAGE_W, height: STAGE_H });
+            const shadowRT = PIXI.RenderTexture.create({ width: STAGE_W, height: STAGE_H });
+            const leftRightRT = PIXI.RenderTexture.create({ width: STAGE_W, height: STAGE_H });
+
+            let shadeContainer, insideContainer, shadowContainer, leftRightContainer;
+            let shadeSprite, shadeMaskSprite;
+            let insideSprite, insideLeftMaskSprite, insideRightMaskSprite;
+            let leftShadowSprite, rightShadowSprite;
+            let leftPieceSprite, rightPieceSprite;
+
+            function buildCompositors() {
+                // --- Shade bi cat bang Right_Mask (destination-out -> ERASE) ---
+                shadeSprite = new PIXI.Sprite(textures.shade);
+                shadeMaskSprite = new PIXI.Sprite(textures.rightMask);
+                shadeMaskSprite.blendMode = PIXI.BLEND_MODES.ERASE;
+                shadeContainer = new PIXI.Container();
+                shadeContainer.addChild(shadeSprite, shadeMaskSprite);
+
+                // --- Inside bi cat boi ca Left_Mask va Right_Mask ---
+                insideSprite = new PIXI.Sprite(textures.inside);
+                insideLeftMaskSprite = new PIXI.Sprite(textures.leftMask);
+                insideLeftMaskSprite.blendMode = PIXI.BLEND_MODES.ERASE;
+                insideRightMaskSprite = new PIXI.Sprite(textures.rightMask);
+                insideRightMaskSprite.blendMode = PIXI.BLEND_MODES.ERASE;
+                insideContainer = new PIXI.Container();
+                insideContainer.addChild(insideSprite, insideLeftMaskSprite, insideRightMaskSprite);
+
+                // --- Left_Shadow x Right_Shadow gop lam 1 (multiply giua 2 anh) ---
+                leftShadowSprite = new PIXI.Sprite(textures.leftShadow);
+                rightShadowSprite = new PIXI.Sprite(textures.rightShadow);
+                rightShadowSprite.blendMode = PIXI.BLEND_MODES.MULTIPLY;
+                shadowContainer = new PIXI.Container();
+                shadowContainer.addChild(leftShadowSprite, rightShadowSprite);
+
+                // --- Left + Right gop lam 1 (khong blend, chi la 2 lop chong) ---
+                leftPieceSprite = new PIXI.Sprite(textures.left);
+                rightPieceSprite = new PIXI.Sprite(textures.right);
+                leftRightContainer = new PIXI.Container();
+                leftRightContainer.addChild(leftPieceSprite, rightPieceSprite);
+            }
+
+            function rebuildStaticLayersIfNeeded(force) {
+                if (!force && currentOffset === lastCachedOffset) return;
+
+                shadeSprite.x = -currentOffset;
+                shadeMaskSprite.x = currentOffset;
+                app.renderer.render(shadeContainer, { renderTexture: shadeRT, clear: true });
+
+                insideSprite.x = 0;
+                insideLeftMaskSprite.x = -currentOffset;
+                insideRightMaskSprite.x = currentOffset;
+                app.renderer.render(insideContainer, { renderTexture: insideRT, clear: true });
+
+                leftShadowSprite.x = -currentOffset;
+                rightShadowSprite.x = currentOffset;
+                app.renderer.render(shadowContainer, { renderTexture: shadowRT, clear: true });
+
+                leftPieceSprite.x = -currentOffset;
+                rightPieceSprite.x = currentOffset;
+                app.renderer.render(leftRightContainer, { renderTexture: leftRightRT, clear: true });
+
+                lastCachedOffset = currentOffset;
+            }
+
+            // ==========================================
+            // 5) MAT CHINH + 11 MAT PHU: DUNG RENDERTEXTURE + BLEND MODE 'SRC_IN' (giong het canvas
+            //    'source-in') THAY VI sprite.mask CUA PIXI. Ly do: co che .mask cua Pixi chay qua mot
+            //    filter pass rieng va xu ly alpha khac di, gay nhat mau. Dung RenderTexture + SRC_IN
+            //    (cung ho blend-mode family voi ERASE dang dung cho shade/inside, da xac nhan dung mau)
+            //    de dam bao ket qua giong het ban Canvas 2D.
+            //
+            //    TOI UU FPS: moi RenderTexture chi to bang BOUNDING BOX cua anh "bound" tuong ung
+            //    (thay vi full 1200x900), giam khoi luong GPU phai xu ly cho ca 12 mat moi frame.
+            // ==========================================
+            let eyeResultSprite, eyeContentSprite, eyeBBox, eyeCompositeContainer, eyeRT;
+            const extraEyeEntries = []; // { compositeContainer, contentSprite, resultSprite, rt, cfg, bbox }
+
             function computeBBox(img, padding) {
                 if (padding === undefined) padding = 6;
-                decodeCtx.clearRect(0, 0, 1200, 900);
-                decodeCtx.drawImage(img, 0, 0, 1200, 900);
-                const data = decodeCtx.getImageData(0, 0, 1200, 900).data;
-                let minX = 1200, minY = 900, maxX = -1, maxY = -1;
-                // Quet theo hang, bo qua nhanh cac hang/cot rong de nhanh hon
-                for (let y = 0; y < 900; y++) {
-                    const rowBase = y * 1200 * 4;
-                    for (let x = 0; x < 1200; x++) {
+                hitCtx.clearRect(0, 0, STAGE_W, STAGE_H);
+                hitCtx.drawImage(img, 0, 0, STAGE_W, STAGE_H);
+                const data = hitCtx.getImageData(0, 0, STAGE_W, STAGE_H).data;
+                let minX = STAGE_W, minY = STAGE_H, maxX = -1, maxY = -1;
+                for (let y = 0; y < STAGE_H; y++) {
+                    const rowBase = y * STAGE_W * 4;
+                    for (let x = 0; x < STAGE_W; x++) {
                         if (data[rowBase + x * 4 + 3] > 10) {
                             if (x < minX) minX = x;
                             if (x > maxX) maxX = x;
@@ -309,42 +304,130 @@
                         }
                     }
                 }
-                if (maxX < 0) return { x: 0, y: 0, w: 1200, h: 900 }; // anh rong toan bo, fallback an toan
+                if (maxX < 0) return { x: 0, y: 0, w: STAGE_W, h: STAGE_H };
                 minX = Math.max(0, minX - padding);
                 minY = Math.max(0, minY - padding);
-                maxX = Math.min(1199, maxX + padding);
-                maxY = Math.min(899, maxY + padding);
+                maxX = Math.min(STAGE_W - 1, maxX + padding);
+                maxY = Math.min(STAGE_H - 1, maxY + padding);
                 return { x: minX, y: minY, w: (maxX - minX + 1), h: (maxY - minY + 1) };
             }
 
-            let eyeBoundBBox = null; // bbox cho mat chinh (Eye_Cursor_Bound)
+            function buildEyes() {
+                // --- Mat chinh (padding rong hon vi di chuyen +-10px theo cursor) ---
+                eyeBBox = computeBBox(rawImages.eyeBound, 16);
+                const eyeBoundForComposite = new PIXI.Sprite(textures.eyeBound);
+                eyeBoundForComposite.position.set(-eyeBBox.x, -eyeBBox.y);
+                eyeContentSprite = new PIXI.Sprite(textures.eye);
+                eyeContentSprite.blendMode = PIXI.BLEND_MODES.SRC_IN; // giu lai mau/alpha cua eye, chi trong pham vi bound co alpha
+                eyeCompositeContainer = new PIXI.Container();
+                eyeCompositeContainer.addChild(eyeBoundForComposite, eyeContentSprite);
 
-            for (let key in imageSources) {
-                images[key] = new Image();
-                images[key].src = imageSources[key];
-                images[key].onload = () => {
-                    loadedCount++;
-                    if (loadedCount === totalImages) {
-                        // Build cac alpha map va bounding box MOT LAN duy nhat, ngay khi anh load xong
-                        leftAlpha = buildAlphaMap(images.left);
-                        rightAlpha = buildAlphaMap(images.right);
+                eyeRT = PIXI.RenderTexture.create({ width: eyeBBox.w, height: eyeBBox.h });
+                eyeResultSprite = new PIXI.Sprite(eyeRT); // sprite them vao app.stage
+                eyeResultSprite.position.set(eyeBBox.x, eyeBBox.y);
 
-                        eyeBoundBBox = computeBBox(images.eyeBound, 16); // padding rong hon vi mat chinh di chuyen +-10px
+                // --- 11 mat phu (padding vua du cho bien do di chuyen +-12px cua radiusX/radiusY) ---
+                extraEyesConfig.forEach(cfg => {
+                    const boundImg = rawImages[`eye_${cfg.id}_bound`];
+                    const bbox = computeBBox(boundImg, 16);
 
-                        extraEyesConfig.forEach(cfg => {
-                            const boundImg = images[`eye_${cfg.id}_bound`];
-                            cfg.bbox = boundImg ? computeBBox(boundImg, 4) : { x: 0, y: 0, w: 1200, h: 900 };
-                        });
+                    const boundForComposite = new PIXI.Sprite(textures[`eye_${cfg.id}_bound`]);
+                    boundForComposite.position.set(-bbox.x, -bbox.y);
+                    const contentSprite = new PIXI.Sprite(textures[`eye_${cfg.id}`]);
+                    contentSprite.blendMode = PIXI.BLEND_MODES.SRC_IN;
 
-                        init();
-                    }
+                    const compositeContainer = new PIXI.Container();
+                    compositeContainer.addChild(boundForComposite, contentSprite);
+
+                    const rt = PIXI.RenderTexture.create({ width: bbox.w, height: bbox.h });
+                    const resultSprite = new PIXI.Sprite(rt);
+                    resultSprite.position.set(bbox.x, bbox.y);
+
+                    extraEyeEntries.push({ compositeContainer, contentSprite, resultSprite, rt, cfg, bbox });
+                });
+            }
+
+            function renderEyesThisFrame() {
+                // Mat chinh: vi tri thay doi moi frame (lerp theo cursor) nen phai render lai RT moi frame
+                // Vi tri content phai tru di bbox.x/y de dung toa do cuc bo cua RT nho
+                eyeContentSprite.position.set(currentEye.x - eyeBBox.x, currentEye.y - eyeBBox.y);
+                app.renderer.render(eyeCompositeContainer, { renderTexture: eyeRT, clear: true });
+
+                // 11 mat phu: vi tri cung lerp moi frame -> render lai moi frame
+                extraEyeEntries.forEach(entry => {
+                    entry.contentSprite.position.set(
+                        entry.cfg.currX - entry.bbox.x,
+                        entry.cfg.currY - entry.bbox.y
+                    );
+                    app.renderer.render(entry.compositeContainer, { renderTexture: entry.rt, clear: true });
+                });
+            }
+
+            // ==========================================
+            // 6) DAY LEN: VE BANG PIXI.Graphics (GPU tessellation) MOI FRAME,
+            //    ROI ERASE BOI Left_Mask VAO MOT RENDER TEXTURE (van animate nen phai lam moi frame,
+            //    nhung gio la GPU thay vi CPU fill).
+            // ==========================================
+            let threads = [];
+            let yarnGraphics, threadsLeftMaskSprite, threadsContainer;
+            const threadsRT = PIXI.RenderTexture.create({ width: STAGE_W, height: STAGE_H });
+
+            // === HELPER: DIEM TREN DUONG BEZIER TAI THAM SO t (0..1) ===
+            function bezierPointAt(t, x0, y0, cp1x, cp1y, cp2x, cp2y, x1, y1) {
+                const mt = 1 - t;
+                return {
+                    x: mt * mt * mt * x0 + 3 * mt * mt * t * cp1x + 3 * mt * t * t * cp2x + t * t * t * x1,
+                    y: mt * mt * mt * y0 + 3 * mt * mt * t * cp1y + 3 * mt * t * t * cp2y + t * t * t * y1
                 };
             }
 
-            function init() {
-                initOptimizedFilmEffect();
-                setupThreads();
-                requestAnimationFrame(renderLoop);
+            // === HELPER: TINH MOC DASH (theo tham so t, 0..1) MOT LAN DUY NHAT tu mot hinh dang
+            //    "dai dien" luc setup. Vi day chi la MOC THAM SO co dinh (khong phai do dai pixel
+            //    thuc te moi frame), khi soi day sau nay dong dua (sag/pulse doi theo thoi gian),
+            //    hoa van se DI CHUYEN CUNG VOI VAT LIEU (giong nhu son ve len soi day that) thay vi
+            //    "chay" doc theo day nhu ban truoc (do truoc day tinh lai tu dau moi frame theo do
+            //    dai cung thuc te, ma do dai nay bien thien lien tuc vi soi day dong dua).
+            function computeDashBreakpoints(x0, y0, cp1x, cp1y, cp2x, cp2y, x1, y1, dashLen, gapLen) {
+                const SEGMENTS = 200;
+                let breakpoints = [0];
+                let prev = bezierPointAt(0, x0, y0, cp1x, cp1y, cp2x, cp2y, x1, y1);
+                let dashOn = true;
+                let dashRemaining = dashLen;
+
+                for (let i = 1; i <= SEGMENTS; i++) {
+                    const t = i / SEGMENTS;
+                    const pt = bezierPointAt(t, x0, y0, cp1x, cp1y, cp2x, cp2y, x1, y1);
+                    const segLen = Math.hypot(pt.x - prev.x, pt.y - prev.y);
+                    dashRemaining -= segLen;
+                    if (dashRemaining <= 0) {
+                        breakpoints.push(t);
+                        dashOn = !dashOn;
+                        dashRemaining = dashOn ? dashLen : gapLen;
+                    }
+                    prev = pt;
+                }
+                breakpoints.push(1);
+                return breakpoints; // t=0..breakpoints[1] la "on", breakpoints[1]..breakpoints[2] la "off", xen ke
+            }
+
+            // === VE NET DUT THEO MOC THAM SO CO DINH, NHUNG DUNG TOA DO SONG (LIVE) MOI FRAME ===
+            function drawDashedFromBreakpoints(g, breakpoints, x0, y0, cp1x, cp1y, cp2x, cp2y, x1, y1, lineWidth, color, alpha) {
+                g.lineStyle(lineWidth, color, alpha);
+                for (let i = 0; i < breakpoints.length - 1; i++) {
+                    const isOn = (i % 2 === 0); // bat dau tu "on"
+                    if (!isOn) continue;
+                    const tStart = breakpoints[i];
+                    const tEnd = breakpoints[i + 1];
+                    // Chia nho doan [tStart,tEnd] thanh vai buoc de bam sat duong cong (khong chi 1 doan thang)
+                    const STEPS = 3;
+                    const p0 = bezierPointAt(tStart, x0, y0, cp1x, cp1y, cp2x, cp2y, x1, y1);
+                    g.moveTo(p0.x, p0.y);
+                    for (let s = 1; s <= STEPS; s++) {
+                        const t = tStart + (tEnd - tStart) * (s / STEPS);
+                        const p = bezierPointAt(t, x0, y0, cp1x, cp1y, cp2x, cp2y, x1, y1);
+                        g.lineTo(p.x, p.y);
+                    }
+                }
             }
 
             function setupThreads() {
@@ -354,13 +437,11 @@
 
                 const leftAnchors = [];
                 const rightAnchors = [];
-
                 for (let i = 1; i <= numThreads; i++) {
                     const targetY = Math.round(minY + stepY * i);
                     leftAnchors.push({ x: 510, y: targetY });
                     rightAnchors.push({ x: 620, y: targetY });
                 }
-
                 for (let i = rightAnchors.length - 1; i > 0; i--) {
                     const j = Math.floor(Math.random() * (i + 1));
                     [rightAnchors[i], rightAnchors[j]] = [rightAnchors[j], rightAnchors[i]];
@@ -371,26 +452,43 @@
                     const pLeft = leftAnchors[i];
                     const pRight = rightAnchors[i];
                     const initialDist = Math.hypot(pRight.x - pLeft.x, pRight.y - pLeft.y);
+                    const totalLength = initialDist + MIN_EXTRA_LENGTH;
+                    const curveFactor1 = (Math.random() - 0.5) * 1.5;
+                    const curveFactor2 = (Math.random() - 0.5) * 1.5;
+                    const phaseShift = Math.random() * Math.PI * 2;
+
+                    // Tinh mot hinh dang "dai dien" (offset=0, thoi diem t=0) chi de lam co so
+                    // tinh moc dash CO DINH theo tham so t - khong dung de ve thuc te.
+                    const nomLx = pLeft.x, nomLy = pLeft.y, nomRx = pRight.x, nomRy = pRight.y;
+                    const nomStraightDist = initialDist;
+                    const nomSlack = Math.max(0, totalLength - nomStraightDist);
+                    const nomSagDepth = Math.pow(nomSlack, 0.78) * 0.7;
+                    const nomPulse = Math.sin(phaseShift) * 3 * (2.5 + 0.5 * Math.sin(i));
+                    const nomCp1x = nomLx + (nomRx - nomLx) * 0.35 + (curveFactor1 * nomSagDepth * 0.25);
+                    const nomCp1y = nomLy + nomSagDepth * 0.8 + nomPulse + (curveFactor1 * 20);
+                    const nomCp2x = nomLx + (nomRx - nomLx) * 0.65 + (curveFactor2 * nomSagDepth * 0.25);
+                    const nomCp2y = nomRy + nomSagDepth * 0.8 - nomPulse + (curveFactor2 * 20);
 
                     threads.push({
-                        localLeftX: pLeft.x,
-                        localLeftY: pLeft.y,
-                        localRightX: pRight.x,
-                        localRightY: pRight.y,
-                        totalLength: initialDist + MIN_EXTRA_LENGTH,
-                        curveFactor1: (Math.random() - 0.5) * 1.5,
-                        curveFactor2: (Math.random() - 0.5) * 1.5,
-                        phaseShift: Math.random() * Math.PI * 2,
+                        localLeftX: pLeft.x, localLeftY: pLeft.y,
+                        localRightX: pRight.x, localRightY: pRight.y,
+                        totalLength,
+                        curveFactor1, curveFactor2, phaseShift,
                         baseColor: YARN_COLORS[i % YARN_COLORS.length],
-                        cp1: { x: 0, y: 0 },
-                        cp2: { x: 0, y: 0 },
-                        leftPt: { x: 0, y: 0 },
-                        rightPt: { x: 0, y: 0 }
+                        dashBreakpoints1: computeDashBreakpoints(nomLx, nomLy, nomCp1x, nomCp1y, nomCp2x, nomCp2y, nomRx, nomRy, 4, 3),
+                        dashBreakpoints2: computeDashBreakpoints(nomLx, nomLy, nomCp1x, nomCp1y, nomCp2x, nomCp2y, nomRx, nomRy, 2, 5),
                     });
                 }
+
+                yarnGraphics = new PIXI.Graphics();
+                threadsLeftMaskSprite = new PIXI.Sprite(textures.leftMask);
+                threadsLeftMaskSprite.blendMode = PIXI.BLEND_MODES.ERASE;
+                threadsContainer = new PIXI.Container();
+                threadsContainer.addChild(yarnGraphics, threadsLeftMaskSprite);
             }
 
-            function drawYarnThreads(targetCtx, time) {
+            function drawYarnThreads(g, time) {
+                g.clear();
                 threads.forEach((t, index) => {
                     const lx = t.localLeftX - currentOffset;
                     const ly = t.localLeftY;
@@ -406,286 +504,244 @@
 
                     const cp1x = lx + (rx - lx) * 0.35 + (t.curveFactor1 * sagDepth * 0.25);
                     const cp1y = ly + sagDepth * 0.8 + pulse + (t.curveFactor1 * 20);
-
                     const cp2x = lx + (rx - lx) * 0.65 + (t.curveFactor2 * sagDepth * 0.25);
                     const cp2y = ry + sagDepth * 0.8 - pulse + (t.curveFactor2 * 20);
 
-                    targetCtx.save();
+                    // 1. Bong do
+                    g.lineStyle(5, 0x000000, 0.4);
+                    g.moveTo(lx, ly + 4);
+                    g.bezierCurveTo(cp1x, cp1y + 4, cp2x, cp2y + 4, rx, ry + 4);
 
-                    targetCtx.beginPath();
-                    targetCtx.moveTo(lx, ly + 4);
-                    targetCtx.bezierCurveTo(cp1x, cp1y + 4, cp2x, cp2y + 4, rx, ry + 4);
-                    targetCtx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
-                    targetCtx.lineWidth = 5;
-                    targetCtx.stroke();
+                    // 2. Than day len chinh (co bo tron dau net, giong lineCap='round' cua ban goc)
+                    g.lineStyle({ width: 4.5, color: t.baseColor, alpha: 1, cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND });
+                    g.moveTo(lx, ly);
+                    g.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, rx, ry);
 
-                    targetCtx.beginPath();
-                    targetCtx.moveTo(lx, ly);
-                    targetCtx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, rx, ry);
-                    targetCtx.strokeStyle = t.baseColor;
-                    targetCtx.lineWidth = 4.5;
-                    targetCtx.lineCap = 'round';
-                    targetCtx.stroke();
+                    // 3. Vien sang net dut - dung MOC CO DINH (khong tinh lai theo do dai moi frame)
+                    drawDashedFromBreakpoints(g, t.dashBreakpoints1, lx, ly, cp1x, cp1y, cp2x, cp2y, rx, ry, 2, 0xffffff, 0.25);
 
-                    targetCtx.setLineDash([4, 3]);
-                    targetCtx.beginPath();
-                    targetCtx.moveTo(lx, ly);
-                    targetCtx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, rx, ry);
-                    targetCtx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-                    targetCtx.lineWidth = 2;
-                    targetCtx.stroke();
+                    // 4. Lop toi net dut tao cam giac xoan - cung dung moc co dinh
+                    drawDashedFromBreakpoints(g, t.dashBreakpoints2, lx - 1, ly - 1, cp1x - 1, cp1y - 1, cp2x - 1, cp2y - 1, rx - 1, ry - 1, 2, 0x000000, 0.3);
 
-                    targetCtx.setLineDash([2, 5]);
-                    targetCtx.beginPath();
-                    targetCtx.moveTo(lx - 1, ly - 1);
-                    targetCtx.bezierCurveTo(cp1x - 1, cp1y - 1, cp2x - 1, cp2y - 1, rx - 1, ry - 1);
-                    targetCtx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
-                    targetCtx.lineWidth = 2;
-                    targetCtx.stroke();
-
-                    targetCtx.setLineDash([]);
-                    targetCtx.strokeStyle = t.baseColor;
-                    targetCtx.lineWidth = 1;
-                    targetCtx.globalAlpha = 0.6;
-
+                    // 5. Fuzz
+                    g.lineStyle(1, t.baseColor, 0.6);
                     const samples = 15;
                     for (let i = 1; i < samples; i++) {
                         const u = i / samples;
                         const px = Math.pow(1 - u, 3) * lx + 3 * Math.pow(1 - u, 2) * u * cp1x + 3 * (1 - u) * u * u * cp2x + u * u * u * rx;
                         const py = Math.pow(1 - u, 3) * ly + 3 * Math.pow(1 - u, 2) * u * cp1y + 3 * (1 - u) * u * u * cp2y + u * u * u * ry;
-
                         const fuzzAngle = (index + i * 17) % (Math.PI * 2);
                         const fuzzLen = 2.5 + ((i + index) % 3);
-
-                        targetCtx.beginPath();
-                        targetCtx.moveTo(px, py);
-                        targetCtx.lineTo(px + Math.cos(fuzzAngle) * fuzzLen, py + Math.sin(fuzzAngle) * fuzzLen);
-                        targetCtx.stroke();
-                    }
-
-                    targetCtx.restore();
-                });
-            }
-
-            function drawMaskedThreads(time) {
-                // Chi lam viec trong THREADS_BBOX thay vi toan bo 1200x900
-                const b = THREADS_BBOX;
-                threadsCtx.clearRect(b.x, b.y, b.w, b.h);
-                threadsCtx.save();
-                threadsCtx.beginPath();
-                threadsCtx.rect(b.x, b.y, b.w, b.h);
-                threadsCtx.clip();
-                drawYarnThreads(threadsCtx, time);
-                threadsCtx.restore();
-
-                threadsCtx.globalCompositeOperation = 'destination-out';
-                // leftMask duoc dat tai (-currentOffset, 0) tren canvas, nen vung nguon tuong ung
-                // voi dest rect b la (b.x + currentOffset, b.y, b.w, b.h) trong anh goc.
-                threadsCtx.drawImage(images.leftMask, b.x + currentOffset, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
-                threadsCtx.globalCompositeOperation = 'source-over';
-                ctx.drawImage(threadsCanvas, b.x, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
-            }
-
-            // === FIX #2: CACHE SHADE MASK + INSIDE MASK + SHADOW(multiply) + LEFT/RIGHT, CHI VE LAI KHI currentOffset THAY DOI ===
-            // Ca 4 nhom nay chi phu thuoc currentOffset (khong co animation theo thoi gian),
-            // nen truoc day bi ve lai toan bo 1200x900 O MOI FRAME la lang phi rat lon.
-            let lastCachedOffset = null; // offset da dung de tinh cache lan cuoi (null = chua tinh)
-            const combinedShadowCanvas = createOffscreenCanvas();
-            const combinedShadowCtx = combinedShadowCanvas.getContext('2d');
-            const combinedLeftRightCanvas = createOffscreenCanvas();
-            const combinedLeftRightCtx = combinedLeftRightCanvas.getContext('2d');
-
-            // Bounding box gan dung cho vung dây len co the xuat hien (theo currentOffset toi da)
-            // De tranh phai tinh lai moi frame, chi can mot vung du rong bao het truong hop keo max.
-            const THREADS_BBOX = {
-                x: Math.max(0, 510 - MAX_DRAG_DIST - 120),
-                y: Math.max(0, THREAD_MIN_Y - 60),
-                w: Math.min(1200, (620 + MAX_DRAG_DIST + 120) - Math.max(0, 510 - MAX_DRAG_DIST - 120)),
-                h: Math.min(900, (THREAD_MAX_Y + 60) - Math.max(0, THREAD_MIN_Y - 60))
-            };
-
-            function rebuildStaticMasksIfNeeded() {
-                if (currentOffset === lastCachedOffset) return; // offset khong doi -> dung lai cache cu
-
-                // --- Shade + Right_Mask ---
-                shadeMaskCtx.clearRect(0, 0, 1200, 900);
-                shadeMaskCtx.drawImage(images.shade, -currentOffset, 0, 1200, 900);
-                shadeMaskCtx.globalCompositeOperation = 'destination-out';
-                shadeMaskCtx.drawImage(images.rightMask, currentOffset, 0, 1200, 900);
-                shadeMaskCtx.globalCompositeOperation = 'source-over';
-
-                // --- Inside + Left_Mask + Right_Mask ---
-                insideMaskCtx.clearRect(0, 0, 1200, 900);
-                insideMaskCtx.drawImage(images.inside, 0, 0, 1200, 900);
-                insideMaskCtx.globalCompositeOperation = 'destination-out';
-                insideMaskCtx.drawImage(images.leftMask, -currentOffset, 0, 1200, 900);
-                insideMaskCtx.drawImage(images.rightMask, currentOffset, 0, 1200, 900);
-                insideMaskCtx.globalCompositeOperation = 'source-over';
-
-                // --- Gop Left_Shadow + Right_Shadow thanh 1 canvas (multiply giua 2 anh nay voi nhau) ---
-                // De luc render chi can 1 lan drawImage(multiply) thay vi 2 lan.
-                combinedShadowCtx.clearRect(0, 0, 1200, 900);
-                combinedShadowCtx.drawImage(images.leftShadow, -currentOffset, 0, 1200, 900);
-                combinedShadowCtx.globalCompositeOperation = 'multiply';
-                combinedShadowCtx.drawImage(images.rightShadow, currentOffset, 0, 1200, 900);
-                combinedShadowCtx.globalCompositeOperation = 'source-over';
-
-                // --- Gop Left + Right thanh 1 canvas (khong can blend, chi la 2 lop phu thuong) ---
-                combinedLeftRightCtx.clearRect(0, 0, 1200, 900);
-                combinedLeftRightCtx.drawImage(images.left, -currentOffset, 0, 1200, 900);
-                combinedLeftRightCtx.drawImage(images.right, currentOffset, 0, 1200, 900);
-
-                lastCachedOffset = currentOffset;
-            }
-
-            function drawClippedEye() {
-                // Chi lam viec trong bbox cua eyeBound thay vi toan bo 1200x900
-                const b = eyeBoundBBox || { x: 0, y: 0, w: 1200, h: 900 };
-
-                eyeClipCtx.clearRect(b.x, b.y, b.w, b.h);
-                eyeClipCtx.drawImage(images.eyeBound, b.x, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
-                eyeClipCtx.globalCompositeOperation = 'source-in';
-                // Lay dung phan nguon cua anh "eye" tuong ung voi vung dich b, co tinh den do lech currentEye.x/y
-                eyeClipCtx.drawImage(
-                    images.eye,
-                    b.x - currentEye.x, b.y - currentEye.y, b.w, b.h,
-                    b.x, b.y, b.w, b.h
-                );
-                eyeClipCtx.globalCompositeOperation = 'source-over';
-                ctx.drawImage(eyeClipCanvas, b.x, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
-            }
-
-            // === FIX #3 (BONUS): CAP NHAT MAT PHU O ~30FPS THAY VI 60FPS ===
-            let lastExtraEyesUpdate = 0;
-            const EXTRA_EYES_INTERVAL = 33; // ms, ~30fps
-
-            function updateAndDrawExtraEyes(now) {
-                const shouldUpdateLerp = (now - lastExtraEyesUpdate) >= EXTRA_EYES_INTERVAL;
-                if (shouldUpdateLerp) lastExtraEyesUpdate = now;
-
-                extraEyesConfig.forEach(cfg => {
-                    if (now > cfg.nextChangeTime) {
-                        const angle = Math.random() * Math.PI * 2;
-                        const dist = 0.2 + Math.random();
-
-                        const unrotatedX = Math.cos(angle) * cfg.radiusX * dist;
-                        const unrotatedY = Math.sin(angle) * cfg.radiusY * dist;
-
-                        cfg.targetX = unrotatedX * Math.cos(cfg.rotation) - unrotatedY * Math.sin(cfg.rotation);
-                        cfg.targetY = unrotatedX * Math.sin(cfg.rotation) + unrotatedY * Math.cos(cfg.rotation);
-
-                        cfg.nextChangeTime = now + 500 + Math.random() * 2500;
-                    }
-
-                    if (shouldUpdateLerp) {
-                        cfg.currX += (cfg.targetX - cfg.currX) * 0.16;
-                        cfg.currY += (cfg.targetY - cfg.currY) * 0.16;
-                    }
-
-                    const eyeImg = images[`eye_${cfg.id}`];
-                    const boundImg = images[`eye_${cfg.id}_bound`];
-
-                    if (eyeImg && boundImg) {
-                        // Chi lam viec trong bbox rieng cua tung mat phu (thay vi 1200x900 full-canvas)
-                        const b = cfg.bbox || { x: 0, y: 0, w: 1200, h: 900 };
-
-                        extraEyeClipCtx.clearRect(b.x, b.y, b.w, b.h);
-                        extraEyeClipCtx.drawImage(boundImg, b.x, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
-                        extraEyeClipCtx.globalCompositeOperation = 'source-in';
-                        extraEyeClipCtx.drawImage(
-                            eyeImg,
-                            b.x - cfg.currX, b.y - cfg.currY, b.w, b.h,
-                            b.x, b.y, b.w, b.h
-                        );
-                        extraEyeClipCtx.globalCompositeOperation = 'source-over';
-
-                        ctx.drawImage(extraEyeClipCanvas, b.x, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
+                        g.moveTo(px, py);
+                        g.lineTo(px + Math.cos(fuzzAngle) * fuzzLen, py + Math.sin(fuzzAngle) * fuzzLen);
                     }
                 });
             }
 
-            function renderLoop(timestamp) {
-                const now = timestamp || 0;
-                ctx.clearRect(0, 0, 1200, 900);
+            // ==========================================
+            // 7) HIEU UNG PHIM CU: PRE-RENDER 10 FRAME NHIEU/VET XUOC/VIGNETTE (canvas 2D,
+            //    nhung chi lam MOT LAN luc khoi tao, sau do upload thanh PIXI.Texture, GPU chi blit).
+            // ==========================================
+            const FILM_FRAME_COUNT = 10;
+            const filmTextures = [];
+            let currentFilmFrameIndex = 0;
+            let lastFrameChangeTime = 0;
+            let filmSprite;
 
-                currentEye.x += (targetEye.x - currentEye.x) * 0.15;
-                currentEye.y += (targetEye.y - currentEye.y) * 0.15;
+            function initFilmTextures() {
+                for (let f = 0; f < FILM_FRAME_COUNT; f++) {
+                    const c = document.createElement('canvas');
+                    c.width = STAGE_W; c.height = STAGE_H;
+                    const fCtx = c.getContext('2d');
 
-                // 1. Nền
-                ctx.drawImage(images.bg, 0, 0, 1200, 900);
+                    fCtx.fillStyle = 'rgba(112, 66, 20, 0.12)';
+                    fCtx.fillRect(0, 0, STAGE_W, STAGE_H);
 
-                // 2 & 3. Cache shade + inside mask (chi tinh lai khi offset doi)
-                rebuildStaticMasksIfNeeded();
-                ctx.drawImage(shadeMaskCanvas, 0, 0, 1200, 900);
-                ctx.drawImage(insideMaskCanvas, 0, 0, 1200, 900);
+                    const noiseData = fCtx.createImageData(STAGE_W, STAGE_H);
+                    const data = noiseData.data;
+                    for (let i = 0; i < data.length; i += 4) {
+                        if (Math.random() < 0.12) {
+                            const n = Math.random() * 255;
+                            data[i] = n; data[i + 1] = n; data[i + 2] = n; data[i + 3] = 16;
+                        }
+                    }
+                    fCtx.putImageData(noiseData, 0, 0);
 
-                // 4. Mắt phụ (Eye_01 - Eye_11) đảo mắt ngẫu nhiên, lerp o ~30fps
-                updateAndDrawExtraEyes(now);
+                    const scratchCount = Math.floor(Math.random() * 2) + 2;
+                    for (let s = 0; s < scratchCount; s++) {
+                        const sx = Math.random() * STAGE_W;
+                        fCtx.strokeStyle = `rgba(15, 15, 15, ${0.15 + Math.random() * 0.25})`;
+                        fCtx.lineWidth = 0.6 + Math.random() * 1.2;
+                        fCtx.beginPath();
+                        fCtx.moveTo(sx + (Math.random() - 0.5) * 3, 0);
+                        fCtx.lineTo(sx + (Math.random() - 0.5) * 3, STAGE_H);
+                        fCtx.stroke();
+                    }
 
-                // 5. Mắt chính follow cursor
-                drawClippedEye();
+                    const dustCount = Math.floor(Math.random() * 14) + 4;
+                    fCtx.fillStyle = 'rgba(10, 10, 10, 0.65)';
+                    for (let d = 0; d < dustCount; d++) {
+                        fCtx.beginPath();
+                        fCtx.arc(Math.random() * STAGE_W, Math.random() * STAGE_H, 0.8 + Math.random() * 1.5, 0, Math.PI * 2);
+                        fCtx.fill();
+                    }
 
-                // 6. Dây len bị che bởi Left_Mask (van phai ve moi frame vi co animation, nhung da bound vung)
-                drawMaskedThreads(now);
+                    if (Math.random() < 0.4) {
+                        fCtx.strokeStyle = 'rgba(10, 10, 10, 0.75)';
+                        fCtx.lineWidth = 1.0;
+                        const hx = Math.random() * STAGE_W;
+                        const hy = Math.random() * STAGE_H;
+                        fCtx.beginPath();
+                        fCtx.moveTo(hx, hy);
+                        fCtx.quadraticCurveTo(hx + 10, hy + 15, hx + (Math.random() - 0.5) * 30, hy + 25);
+                        fCtx.stroke();
+                    }
 
-                // 7. Bóng đổ mảng Left/Right (Multiply) - da gop lam 1 canvas, cache theo offset
-                ctx.save();
-                ctx.globalCompositeOperation = 'multiply';
-                ctx.drawImage(combinedShadowCanvas, 0, 0, 1200, 900);
-                ctx.restore();
+                    const vigGrad = fCtx.createRadialGradient(600, 450, 380, 600, 450, 720);
+                    vigGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+                    vigGrad.addColorStop(0.7, 'rgba(0, 0, 0, 0.35)');
+                    vigGrad.addColorStop(0.92, 'rgba(10, 10, 10, 0.8)');
+                    vigGrad.addColorStop(1, 'rgba(0, 0, 0, 0.98)');
+                    fCtx.fillStyle = vigGrad;
+                    fCtx.fillRect(0, 0, STAGE_W, STAGE_H);
 
-                // 8. Hai mảnh Left / Right phủ trên cùng - da gop lam 1 canvas, cache theo offset
-                ctx.drawImage(combinedLeftRightCanvas, 0, 0, 1200, 900);
+                    fCtx.lineWidth = 20;
+                    fCtx.strokeStyle = 'rgba(0, 0, 0, 0.95)';
+                    fCtx.strokeRect(0, 0, STAGE_W, STAGE_H);
 
-                // 9. Lớp phim cổ điển tối ưu hiệu năng (Pre-rendered)
-                drawOldFilmEffect(now);
-
-                requestAnimationFrame(renderLoop);
+                    filmTextures.push(PIXI.Texture.from(c));
+                }
+                filmSprite = new PIXI.Sprite(filmTextures[0]);
             }
 
+            // ==========================================
+            // 8) LAP RAP SCENE GRAPH (THU TU LOP GIONG HET BAN CANVAS 2D)
+            // ==========================================
+            function onAllLoaded() {
+                leftAlpha = buildAlphaMap(rawImages.left);
+                rightAlpha = buildAlphaMap(rawImages.right);
+
+                buildCompositors();
+                buildEyes();
+                setupThreads();
+                initFilmTextures();
+                rebuildStaticLayersIfNeeded(true);
+
+                const bgSprite = new PIXI.Sprite(textures.bg);
+                const shadeMaskedSprite = new PIXI.Sprite(shadeRT);
+                const insideMaskedSprite = new PIXI.Sprite(insideRT);
+                const threadsMaskedSprite = new PIXI.Sprite(threadsRT);
+                const shadowSpriteOnStage = new PIXI.Sprite(shadowRT);
+                shadowSpriteOnStage.blendMode = PIXI.BLEND_MODES.MULTIPLY;
+                const leftRightSpriteOnStage = new PIXI.Sprite(leftRightRT);
+
+                app.stage.addChild(bgSprite);           // 1. Nen
+                app.stage.addChild(shadeMaskedSprite);   // 2. Shade bi che
+                app.stage.addChild(insideMaskedSprite);  // 3. Inside bi che
+                extraEyeEntries.forEach(e => app.stage.addChild(e.resultSprite)); // 4. Mat phu
+                app.stage.addChild(eyeResultSprite);     // 5. Mat chinh
+                app.stage.addChild(threadsMaskedSprite); // 6. Day len
+                app.stage.addChild(shadowSpriteOnStage); // 7. Bong do (multiply)
+                app.stage.addChild(leftRightSpriteOnStage); // 8. Left/Right
+                app.stage.addChild(filmSprite);          // 9. Phim cu
+
+                // === FPS COUNTER DE BAN SO SANH TRUC TIEP VOI BAN CANVAS 2D ===
+                let frames = 0, fpsTimer = 0;
+
+                app.ticker.add((delta) => {
+                    const now = performance.now();
+                    const dt = app.ticker.deltaMS;
+
+                    // Lerp mat chinh + mat phu
+                    currentEye.x += (targetEye.x - currentEye.x) * 0.15;
+                    currentEye.y += (targetEye.y - currentEye.y) * 0.15;
+                    eyeContentSprite.position.set(currentEye.x, currentEye.y);
+
+                    extraEyesConfig.forEach((cfg, idx) => {
+                        if (now > cfg.nextChangeTime) {
+                            const angle = Math.random() * Math.PI * 2;
+                            const dist = 0.2 + Math.random();
+                            const unrotatedX = Math.cos(angle) * cfg.radiusX * dist;
+                            const unrotatedY = Math.sin(angle) * cfg.radiusY * dist;
+                            cfg.targetX = unrotatedX * Math.cos(cfg.rotation) - unrotatedY * Math.sin(cfg.rotation);
+                            cfg.targetY = unrotatedX * Math.sin(cfg.rotation) + unrotatedY * Math.cos(cfg.rotation);
+                            cfg.nextChangeTime = now + 500 + Math.random() * 2500;
+                        }
+                        cfg.currX += (cfg.targetX - cfg.currX) * 0.08;
+                        cfg.currY += (cfg.targetY - cfg.currY) * 0.08;
+                        extraEyeEntries[idx].contentSprite.position.set(cfg.currX, cfg.currY);
+                    });
+
+                    // Ve lai RenderTexture cua mat chinh + 11 mat phu (SRC_IN, giong het canvas source-in)
+                    renderEyesThisFrame();
+
+                    // Cac lop tinh theo offset: chi rebuild khi offset doi
+                    rebuildStaticLayersIfNeeded(false);
+
+                    // Day len: animate moi frame (van can render lai RT vi co chuyen dong)
+                    drawYarnThreads(yarnGraphics, now);
+                    threadsLeftMaskSprite.x = -currentOffset;
+                    app.renderer.render(threadsContainer, { renderTexture: threadsRT, clear: true });
+                    threadsMaskedSprite.texture = threadsRT;
+
+                    // Phim cu: doi frame ~12.5fps + rung nhe
+                    if (now - lastFrameChangeTime > 80) {
+                        currentFilmFrameIndex = (currentFilmFrameIndex + 1) % FILM_FRAME_COUNT;
+                        lastFrameChangeTime = now;
+                    }
+                    filmSprite.texture = filmTextures[currentFilmFrameIndex];
+                    filmSprite.y = (Math.random() - 0.5) * 1.2;
+                    filmSprite.alpha = Math.random() < 0.3 ? (0.92 + Math.random() * 0.08) : 1;
+
+                    // FPS counter
+                    frames++;
+                    fpsTimer += dt;
+                    if (fpsTimer >= 500) {
+                        fpsEl.textContent = 'FPS: ' + Math.round((frames * 1000) / fpsTimer);
+                        frames = 0;
+                        fpsTimer = 0;
+                    }
+                });
+            }
+
+            // ==========================================
+            // 9) INPUT: GIU NGUYEN LOGIC KEO THA + HIT-TEST NHU BAN CU
+            // ==========================================
             function getStagePos(e) {
-                const rect = canvas.getBoundingClientRect();
+                const rect = app.view.getBoundingClientRect();
                 const clientX = e.touches ? e.touches[0].clientX : e.clientX;
                 const clientY = e.touches ? e.touches[0].clientY : e.clientY;
                 return {
-                    x: (clientX - rect.left) * (1200 / rect.width),
-                    y: (clientY - rect.top) * (900 / rect.height)
+                    x: (clientX - rect.left) * (STAGE_W / rect.width),
+                    y: (clientY - rect.top) * (STAGE_H / rect.height)
                 };
             }
 
-            // === FIX #1 (tiep theo): TRA CUU ALPHA TU MANG DA TINH SAN, KHONG VE + KHONG getImageData ===
             function checkHitRegion(x, y) {
-                const px = Math.floor(x);
-                const py = Math.floor(y);
+                const px = Math.floor(x), py = Math.floor(y);
+                if (px < 0 || px >= STAGE_W || py < 0 || py >= STAGE_H) return null;
+                if (!leftAlpha || !rightAlpha) return null;
 
-                if (px < 0 || px >= 1200 || py < 0 || py >= 900) return null;
-                if (!leftAlpha || !rightAlpha) return null; // chua load xong
-
-                // "left" duoc ve tai (-currentOffset, 0) => toa do goc trong anh = (px + currentOffset, py)
                 const leftSrcX = px + currentOffset;
-                if (leftSrcX >= 0 && leftSrcX < 1200) {
-                    if (leftAlpha[py * 1200 + leftSrcX] > 10) return 'left';
+                if (leftSrcX >= 0 && leftSrcX < STAGE_W) {
+                    if (leftAlpha[py * STAGE_W + leftSrcX] > 10) return 'left';
                 }
-
-                // "right" duoc ve tai (currentOffset, 0) => toa do goc trong anh = (px - currentOffset, py)
                 const rightSrcX = px - currentOffset;
-                if (rightSrcX >= 0 && rightSrcX < 1200) {
-                    if (rightAlpha[py * 1200 + rightSrcX] > 10) return 'right';
+                if (rightSrcX >= 0 && rightSrcX < STAGE_W) {
+                    if (rightAlpha[py * STAGE_W + rightSrcX] > 10) return 'right';
                 }
-
                 return null;
             }
 
             function onPointerDown(e) {
                 const pos = getStagePos(e);
                 const hitTarget = checkHitRegion(pos.x, pos.y);
-
                 if (hitTarget) {
                     isDragging = true;
                     dragSource = hitTarget;
                     startStageX = pos.x;
                     dragStartOffset = currentOffset;
-                    stage.style.cursor = 'grabbing';
+                    stageEl.style.cursor = 'grabbing';
                 }
             }
 
@@ -695,16 +751,12 @@
 
                 if (!isDragging) {
                     const hitTarget = checkHitRegion(pos.x, pos.y);
-                    stage.style.cursor = hitTarget ? 'grab' : 'default';
+                    stageEl.style.cursor = hitTarget ? 'grab' : 'default';
                     return;
                 }
 
                 const deltaStageX = pos.x - startStageX;
-
-                let newOffset = (dragSource === 'left')
-                    ? dragStartOffset - deltaStageX
-                    : dragStartOffset + deltaStageX;
-
+                let newOffset = (dragSource === 'left') ? dragStartOffset - deltaStageX : dragStartOffset + deltaStageX;
                 currentOffset = Math.max(0, Math.min(MAX_DRAG_DIST, newOffset));
             }
 
@@ -712,36 +764,31 @@
                 if (isDragging) {
                     isDragging = false;
                     dragSource = null;
-                    stage.style.cursor = 'default';
+                    stageEl.style.cursor = 'default';
                 }
             }
 
             function updateEyePosition(cursorX, cursorY) {
                 const dx = cursorX - EYE_CONFIG.centerX;
                 const dy = cursorY - EYE_CONFIG.centerY;
-
                 const percentX = Math.max(-1, Math.min(1, dx / EYE_CONFIG.centerX));
                 const percentY = Math.max(-1, Math.min(1, dy / EYE_CONFIG.centerY));
-
                 let rawTargetX = percentX * EYE_CONFIG.maxRadius;
                 let rawTargetY = percentY * EYE_CONFIG.maxRadius;
-
                 const distFromCenter = Math.hypot(rawTargetX, rawTargetY);
                 if (distFromCenter > EYE_CONFIG.maxRadius) {
                     const angle = Math.atan2(rawTargetY, rawTargetX);
                     rawTargetX = Math.cos(angle) * EYE_CONFIG.maxRadius;
                     rawTargetY = Math.sin(angle) * EYE_CONFIG.maxRadius;
                 }
-
                 targetEye.x = rawTargetX;
                 targetEye.y = rawTargetY;
             }
 
-            stage.addEventListener('mousedown', onPointerDown);
+            stageEl.addEventListener('mousedown', onPointerDown);
             window.addEventListener('mousemove', onPointerMove);
             window.addEventListener('mouseup', onPointerUp);
-
-            stage.addEventListener('touchstart', onPointerDown, { passive: true });
+            stageEl.addEventListener('touchstart', onPointerDown, { passive: true });
             window.addEventListener('touchmove', onPointerMove, { passive: true });
             window.addEventListener('touchend', onPointerUp);
         })();
