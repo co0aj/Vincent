@@ -92,7 +92,7 @@
             ].map(cfg => ({ ...cfg, currX: 0, currY: 0, targetX: 0, targetY: 0, nextChangeTime: 0 }));
 
             let isDragging = false;
-            let isLoaded = false;
+            let isLoaded = false; // Đánh dấu khi hoàn tất load & khởi tạo
             let dragSource = null;
             let startStageX = 0;
             let currentOffset = 0;
@@ -629,11 +629,12 @@
                     filmSprite.alpha = Math.random() < 0.3 ? (0.92 + Math.random() * 0.08) : 1;
                 });
 
+                // Đánh dấu tài nguyên đã sẵn sàng cho tương tác
                 isLoaded = true;
             }
 
             // ==========================================
-            // 9) INPUT: XỬ LÝ SỰ KIỆN KÉO THẢ VÀ TÍNH HIT-REGION
+            // 9) INPUT: XỬ LÝ SỰ KIỆN KÉO THẢ VÀ AN TOÀN TRẠNG THÁI
             // ==========================================
             function getStagePos(e) {
                 const rect = app.view.getBoundingClientRect();
@@ -650,18 +651,19 @@
                 const px = Math.floor(x), py = Math.floor(y);
                 if (px < 0 || px >= STAGE_W || py < 0 || py >= STAGE_H) return null;
 
-                // Tọa độ thực của điểm click trên mảng Alpha mảnh bên Trái (Left Sprite có position.x = -currentOffset)
-                const leftSrcX = px + currentOffset;
+                // QUAN TRONG: currentOffset thuong la SO THAP PHAN (tinh tu toa do chuot lien tuc).
+                // TypedArray (Uint8ClampedArray) truy cap bang chi so KHONG PHAI SO NGUYEN se luon
+                // tra ve undefined, khien hit-test luon that bai vinh vien sau khi keo lung chung
+                // (chi "vo tinh" dung khi keo den bien 0/MAX_DRAG_DIST vi Math.min/max kep ve dung
+                // so nguyen). Phai lam tron rieng cho phan chi so mang, khong dung currentOffset tho.
+                const leftSrcX = Math.round(px + currentOffset);
                 if (leftSrcX >= 0 && leftSrcX < STAGE_W) {
                     if (leftAlpha[py * STAGE_W + leftSrcX] > 10) return 'left';
                 }
-
-                // Tọa độ thực của điểm click trên mảng Alpha mảnh bên Phải (Right Sprite có position.x = +currentOffset)
-                const rightSrcX = px - currentOffset;
+                const rightSrcX = Math.round(px - currentOffset);
                 if (rightSrcX >= 0 && rightSrcX < STAGE_W) {
                     if (rightAlpha[py * STAGE_W + rightSrcX] > 10) return 'right';
                 }
-
                 return null;
             }
 
@@ -680,6 +682,13 @@
 
             function onPointerMove(e) {
                 if (!isLoaded) return;
+
+                // Phong thu: neu isDragging=true nhung nut chuot thuc te da nha (VD: nha ngoai
+                // cua so trinh duyet) thi tu dong reset, tranh ket trang thai keo mai mai.
+                if (isDragging && !e.touches && typeof e.buttons === 'number' && e.buttons === 0) {
+                    onPointerUp();
+                }
+
                 const pos = getStagePos(e);
                 updateEyePosition(pos.x, pos.y);
 
@@ -695,9 +704,11 @@
             }
 
             function onPointerUp() {
-                isDragging = false;
-                dragSource = null;
-                stageEl.style.cursor = 'default';
+                if (isDragging) {
+                    isDragging = false;
+                    dragSource = null;
+                    stageEl.style.cursor = 'default';
+                }
             }
 
             function updateEyePosition(cursorX, cursorY) {
@@ -717,7 +728,7 @@
                 targetEye.y = rawTargetY;
             }
 
-            // Gắn sự kiện lắng nghe chuột & cảm ứng trên window để chống kẹt
+            // Gắn sự kiện lắng nghe chuột & cảm ứng
             stageEl.addEventListener('mousedown', onPointerDown);
             window.addEventListener('mousemove', onPointerMove);
             window.addEventListener('mouseup', onPointerUp);
@@ -725,8 +736,10 @@
             stageEl.addEventListener('touchstart', onPointerDown, { passive: true });
             window.addEventListener('touchmove', onPointerMove, { passive: true });
             window.addEventListener('touchend', onPointerUp);
+
+            // Bổ sung các sự kiện nhả/hủy tương tác ngoại lệ để chống kẹt isDragging
             window.addEventListener('touchcancel', onPointerUp);
-            window.addEventListener('blur', onPointerUp);
+            window.addEventListener('mouseleave', onPointerUp);
         })();
     </script>
 </body>
