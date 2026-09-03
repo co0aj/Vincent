@@ -92,7 +92,7 @@
             ].map(cfg => ({ ...cfg, currX: 0, currY: 0, targetX: 0, targetY: 0, nextChangeTime: 0 }));
 
             let isDragging = false;
-            let isLoaded = false; // Đánh dấu khi hoàn tất load & khởi tạo
+            let isLoaded = false;
             let dragSource = null;
             let startStageX = 0;
             let currentOffset = 0;
@@ -629,12 +629,11 @@
                     filmSprite.alpha = Math.random() < 0.3 ? (0.92 + Math.random() * 0.08) : 1;
                 });
 
-                // Đánh dấu tài nguyên đã sẵn sàng cho tương tác
                 isLoaded = true;
             }
 
             // ==========================================
-            // 9) INPUT: XỬ LÝ SỰ KIỆN KÉO THẢ VÀ AN TOÀN TRẠNG THÁI
+            // 9) INPUT: XỬ LÝ SỰ KIỆN KÉO THẢ VÀ TÍNH HIT-REGION
             // ==========================================
             function getStagePos(e) {
                 const rect = app.view.getBoundingClientRect();
@@ -651,14 +650,18 @@
                 const px = Math.floor(x), py = Math.floor(y);
                 if (px < 0 || px >= STAGE_W || py < 0 || py >= STAGE_H) return null;
 
+                // Tọa độ thực của điểm click trên mảng Alpha mảnh bên Trái (Left Sprite có position.x = -currentOffset)
                 const leftSrcX = px + currentOffset;
                 if (leftSrcX >= 0 && leftSrcX < STAGE_W) {
                     if (leftAlpha[py * STAGE_W + leftSrcX] > 10) return 'left';
                 }
+
+                // Tọa độ thực của điểm click trên mảng Alpha mảnh bên Phải (Right Sprite có position.x = +currentOffset)
                 const rightSrcX = px - currentOffset;
                 if (rightSrcX >= 0 && rightSrcX < STAGE_W) {
                     if (rightAlpha[py * STAGE_W + rightSrcX] > 10) return 'right';
                 }
+
                 return null;
             }
 
@@ -692,11 +695,9 @@
             }
 
             function onPointerUp() {
-                if (isDragging) {
-                    isDragging = false;
-                    dragSource = null;
-                    stageEl.style.cursor = 'default';
-                }
+                isDragging = false;
+                dragSource = null;
+                stageEl.style.cursor = 'default';
             }
 
             function updateEyePosition(cursorX, cursorY) {
@@ -716,7 +717,7 @@
                 targetEye.y = rawTargetY;
             }
 
-            // Gắn sự kiện lắng nghe chuột & cảm ứng
+            // Gắn sự kiện lắng nghe chuột & cảm ứng trên window để chống kẹt
             stageEl.addEventListener('mousedown', onPointerDown);
             window.addEventListener('mousemove', onPointerMove);
             window.addEventListener('mouseup', onPointerUp);
@@ -724,10 +725,8 @@
             stageEl.addEventListener('touchstart', onPointerDown, { passive: true });
             window.addEventListener('touchmove', onPointerMove, { passive: true });
             window.addEventListener('touchend', onPointerUp);
-
-            // Bổ sung các sự kiện nhả/hủy tương tác ngoại lệ để chống kẹt isDragging
             window.addEventListener('touchcancel', onPointerUp);
-            window.addEventListener('mouseleave', onPointerUp);
+            window.addEventListener('blur', onPointerUp);
         })();
     </script>
 </body>
